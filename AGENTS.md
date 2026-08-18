@@ -52,13 +52,11 @@ rules an agent changing it must follow.
   with `400 invalid_request` here, which is the contract's own rule (hub decision 8).
 - **Execution-failure `error.class` values** inside a `200` result envelope (`timeout`, `panic`,
   `script_error`, `error`, `compile_error`, `non_serializable_result`) are Go-local, the way Ruby's are
-  Ruby class names. The closed vocabulary in `CONTRACT.md` governs REFUSALS. Worth a hub decision so
-  the next port does not invent a third spelling.
+  Ruby class names. The closed vocabulary in `CONTRACT.md` governs REFUSALS — hub decision 6e now says
+  so explicitly, so this is sanctioned, not a deviation to reconcile.
 
 ## Open questions for the hub
 
-- `CONTRACT.md`'s error table says a stale `issued_at` is `401 bad_signature`, but `decisions.md` §1
-  and both implementations answer `409 replay`. The docs should pick one (we follow `409`).
 - A script's spawned goroutine outlives the deadline (yaegi cannot be killed). The contract's
   "timeout is a backstop, not a transaction boundary" covers the spirit; the script-authoring rule
   ("don't spawn goroutines") is currently only in our README.
