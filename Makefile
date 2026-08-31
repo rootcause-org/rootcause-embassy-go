@@ -1,4 +1,4 @@
-.PHONY: check build vet lint test fmt
+.PHONY: check build vet lint test conformance fmt
 
 # The one gate. CI and a release run exactly this.
 check: build vet lint test
@@ -20,6 +20,9 @@ lint:
 
 test:
 	go test ./...
+
+conformance:
+	go test ./internal/contract
 
 fmt:
 	gofmt -w .

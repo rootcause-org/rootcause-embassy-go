@@ -11,7 +11,7 @@ import (
 )
 
 // Version is this Embassy's release, surfaced by the health endpoint.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // Protocol is the wire protocol generation. Bumped ONLY on a breaking change:
 // additive fields stay non-breaking because the action/result direction decodes
@@ -33,6 +33,13 @@ type Config struct {
 	// action and analysis planes. Never the chat webhook_secret, never the API key,
 	// and no fallback in any direction. Env: ROOTCAUSE_ACTION_SECRET.
 	Secret string
+
+	// Secrets selects the action_reverse_secret by project UUID for a shared
+	// Embassy deployment. Configure Secrets OR Secret, never both. Map values
+	// must be non-blank; map-mode inbound bodies and health queries must carry a
+	// project selector, while outbound analysis calls use their request's
+	// ProjectID.
+	Secrets map[string]string
 
 	// FetchURL is the host's script-by-digest endpoint, hit on a cache miss.
 	// Env: ROOTCAUSE_FETCH_URL.
@@ -166,7 +173,10 @@ func (c *Config) applyDefaults() {
 // validate fails closed at BOOT rather than on the first invocation: every check
 // here catches a deployment mistake, not a runtime condition.
 func (c *Config) validate() error {
-	if c.Secret == "" {
+	if err := c.validateSecrets(); err != nil {
+		return err
+	}
+	if c.Secret == "" && len(c.Secrets) == 0 {
 		return fmt.Errorf("embassy: Secret is required (ROOTCAUSE_ACTION_SECRET) — HMAC with a blank key is trivially forgeable")
 	}
 	if isPlaceholderFetchURL(c.FetchURL) {
@@ -185,6 +195,69 @@ func (c *Config) validate() error {
 		return err
 	}
 	return c.validateChat()
+}
+
+func (c *Config) validateSecrets() error {
+	hasSecret := strings.TrimSpace(c.Secret) != ""
+	hasMap := len(c.Secrets) > 0
+	if hasSecret == hasMap {
+		if hasSecret {
+			return fmt.Errorf("embassy: configure exactly one of Secret or Secrets, not both")
+		}
+		return fmt.Errorf("embassy: Secret is required (ROOTCAUSE_ACTION_SECRET) — HMAC with a blank key is trivially forgeable")
+	}
+	if hasMap {
+		seen := make(map[string]struct{}, len(c.Secrets))
+		for projectID, secret := range c.Secrets {
+			if !validProjectID(projectID) {
+				return fmt.Errorf("embassy: Secrets key %q must be a project UUID", projectID)
+			}
+			canonical := strings.ToLower(projectID)
+			if _, exists := seen[canonical]; exists {
+				return fmt.Errorf("embassy: Secrets contains duplicate project UUID %q", projectID)
+			}
+			seen[canonical] = struct{}{}
+			if strings.TrimSpace(secret) == "" {
+				return fmt.Errorf("embassy: Secrets[%q] must be non-blank", projectID)
+			}
+		}
+	}
+	return nil
+}
+
+func validProjectID(projectID string) bool {
+	return tenantIDPattern.MatchString(projectID) && !strings.EqualFold(projectID, nilUUID)
+}
+
+// secretForProject is the one selector used by every HMAC direction. In
+// single-secret mode project_id remains optional for legacy callbacks/probes.
+func (c *Config) secretForProject(projectID string) (string, bool) {
+	if len(c.Secrets) == 0 {
+		return c.Secret, c.Secret != ""
+	}
+	if !validProjectID(projectID) {
+		return "", false
+	}
+	if secret, ok := c.Secrets[projectID]; ok && strings.TrimSpace(secret) != "" {
+		return secret, true
+	}
+	for configuredID, secret := range c.Secrets {
+		if strings.EqualFold(configuredID, projectID) && strings.TrimSpace(secret) != "" {
+			return secret, true
+		}
+	}
+	return "", false
+}
+
+func (c *Config) outboundSecret(projectID string) (string, error) {
+	if len(c.Secrets) == 0 {
+		return c.Secret, nil
+	}
+	secret, ok := c.secretForProject(projectID)
+	if !ok {
+		return "", fmt.Errorf("embassy: ProjectID must identify a configured project UUID in Secrets")
+	}
+	return secret, nil
 }
 
 // The API plane is opt-in, but a HALF-wired one is a boot mistake rather than a
@@ -219,6 +292,11 @@ func (c *Config) validateChat() error {
 	// two env vars points at the wrong secret.
 	if c.ChatSecret == c.Secret {
 		return fmt.Errorf("embassy: ChatSecret must differ from Secret — ROOTCAUSE_CHAT_SECRET is the project's webhook_secret, not the action reverse-channel secret")
+	}
+	for _, secret := range c.Secrets {
+		if c.ChatSecret == secret {
+			return fmt.Errorf("embassy: ChatSecret must differ from Secrets values — ROOTCAUSE_CHAT_SECRET is the project's webhook_secret, not the action reverse-channel secret")
+		}
 	}
 	if c.ChatBaseURL != "" && !isAbsoluteHTTPURL(c.ChatBaseURL) {
 		return fmt.Errorf("embassy: ChatBaseURL must be an absolute http(s) URL")

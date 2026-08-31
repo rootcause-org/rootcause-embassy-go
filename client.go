@@ -35,7 +35,10 @@ type Principal struct {
 // AnalysisRequest asks rootcause to analyze something and answer later over the
 // result route.
 type AnalysisRequest struct {
-	Subject string
+	// ProjectID selects the reverse secret in Config.Secrets. It is not duplicated
+	// in the trigger body because the host route already identifies the project.
+	ProjectID string
+	Subject   string
 	// Body is required, plain text only (v1).
 	Body        string
 	Attachments []Attachment
@@ -76,6 +79,9 @@ type Answer struct {
 // answers to a run's clarifying questions. Both ride the same route and may
 // arrive together or alone.
 type SentMessageRequest struct {
+	// ProjectID selects the reverse secret in Config.Secrets. It is not duplicated
+	// in the sent-message body because the host route already identifies the project.
+	ProjectID string
 	// SessionID is required — the same handle passed to StartAnalysis.
 	SessionID string
 	// SentBody is the reply that actually left the building. Required unless this
@@ -144,6 +150,10 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 	if request.Body == "" {
 		return Analysis{}, fmt.Errorf("embassy: analysis body is required")
 	}
+	secret, err := e.cfg.outboundSecret(request.ProjectID)
+	if err != nil {
+		return Analysis{}, err
+	}
 	if err := e.checkAttachments(request.Attachments); err != nil {
 		return Analysis{}, err
 	}
@@ -177,7 +187,7 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 		return Analysis{}, fmt.Errorf("embassy: analysis trigger could not be encoded: %w", err)
 	}
 
-	body, err := e.postSigned(ctx, e.cfg.TriggerURL, raw, "analysis trigger")
+	body, err := e.postSigned(ctx, e.cfg.TriggerURL, raw, "analysis trigger", secret)
 	if err != nil {
 		return Analysis{}, err
 	}
@@ -204,6 +214,10 @@ func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageReq
 	if request.SessionID == "" {
 		return SentMessage{}, fmt.Errorf("embassy: SessionID is required")
 	}
+	secret, err := e.cfg.outboundSecret(request.ProjectID)
+	if err != nil {
+		return SentMessage{}, err
+	}
 	if request.SentBody == "" && len(request.Answers) == 0 {
 		return SentMessage{}, fmt.Errorf("embassy: SentBody or Answers is required")
 	}
@@ -228,7 +242,7 @@ func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageReq
 		return SentMessage{}, fmt.Errorf("embassy: sent-message could not be encoded: %w", err)
 	}
 
-	body, err := e.postSigned(ctx, e.cfg.SentMessageURL, raw, "sent-message capture")
+	body, err := e.postSigned(ctx, e.cfg.SentMessageURL, raw, "sent-message capture", secret)
 	if err != nil {
 		return SentMessage{}, err
 	}
@@ -250,13 +264,13 @@ func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageReq
 
 // postSigned signs the RAW bytes and posts them — the receiver verifies exactly
 // what was transmitted, so key order here is irrelevant.
-func (e *Embassy) postSigned(ctx context.Context, url string, raw []byte, label string) ([]byte, error) {
+func (e *Embassy) postSigned(ctx context.Context, url string, raw []byte, label, secret string) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("embassy: %s request could not be built: %w", label, err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set(SignatureHeader, Sign(raw, e.cfg.Secret))
+	request.Header.Set(SignatureHeader, Sign(raw, secret))
 
 	response, err := e.cfg.HTTPClient.Do(request)
 	if err != nil {

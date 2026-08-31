@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -120,4 +121,49 @@ func TestResolverVerifiesDigestAndSignature(t *testing.T) {
 			t.Fatalf("err = %v", err)
 		}
 	})
+}
+
+func TestResolverMapCacheIsPartitionedByProject(t *testing.T) {
+	const script = "package action\n"
+	digest := "sha256:" + sha256Hex(script)
+	var fetches atomic.Int32
+	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		secrets := map[string]string{mapProjectA: mapSecretA, mapProjectB: mapSecretB}
+		secret := secrets[r.URL.Query().Get("project_id")]
+		body, _ := json.Marshal(map[string]string{
+			"action_id": r.URL.Query().Get("action_id"),
+			"digest":    r.URL.Query().Get("digest"),
+			"script":    script,
+			"runtime":   "go",
+		})
+		w.Header().Set(SignatureHeader, Sign(body, secret))
+		_, _ = w.Write(body)
+	}))
+	defer host.Close()
+
+	cfg := &Config{
+		Secrets:  map[string]string{mapProjectA: mapSecretA, mapProjectB: mapSecretB},
+		FetchURL: host.URL,
+		CacheDir: t.TempDir(),
+	}
+	cfg.applyDefaults()
+	if err := cfg.validate(); err != nil {
+		t.Fatal(err)
+	}
+	r := newResolver(cfg)
+	for _, projectID := range []string{mapProjectA, mapProjectB} {
+		if got, err := r.resolve(context.Background(), "same-action", digest, projectID); err != nil || got != script {
+			t.Fatalf("resolve(%s) = %q, %v", projectID, got, err)
+		}
+	}
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("fetches = %d, want one authorized fetch per project", got)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.CacheDir, mapProjectA, sha256Hex(script)+".go")); err != nil {
+		t.Fatalf("project A cache path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.CacheDir, mapProjectB, sha256Hex(script)+".go")); err != nil {
+		t.Fatalf("project B cache path: %v", err)
+	}
 }

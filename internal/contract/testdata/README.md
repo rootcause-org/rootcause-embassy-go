@@ -41,6 +41,7 @@ actions/
   invocation_tenant.json                full tenant tuple
   invocation_dry_run.json               dry_run: true
   script_fetch_query.txt                the RAW query string the GET signature covers
+  health_query.txt                      map-mode health GET raw query
   fetch_response.json                   signed script-by-digest response
   result_ok.json                        success envelope
   result_dry_run.json                   {"dry_run":true,"would_execute":true}
@@ -53,7 +54,7 @@ analysis/
   trigger.json                          minimal: no session, no principal, no tenant
   trigger_with_principal.json           principal + session_id + tenant + attachment
   trigger_response.json                 the 202
-  result_callback.json                  full surface incl. executed_actions/questions/delete
+  result_callback.json                  full surface incl. project_id/executed_actions/questions/delete
   result_ack.json                       the signed 200 ack
   sent_message.json                     proposed vs sent capture
   answers.json                          answers-only variant (no sent body)
@@ -63,6 +64,9 @@ chat/
 ```
 
 ## What a conformance suite asserts
+
+The full per-plane case list is [`../conformance.md`](../conformance.md); the seven points below are
+the spine.
 
 1. **Verify** — for each entry in `signing_vectors.json.bodies`, HMAC-SHA256 the referenced file's
    exact bytes with the listed secret and match `signature`. Also match `body_sha256` and

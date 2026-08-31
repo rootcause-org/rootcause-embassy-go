@@ -26,7 +26,7 @@ type resolver struct {
 	cfg *Config
 
 	mu     sync.RWMutex
-	memory map[string]string // hex digest → verified body
+	memory map[string]string // cache key (project + digest in map mode) → verified body
 }
 
 func newResolver(cfg *Config) *resolver {
@@ -46,12 +46,15 @@ func digestHex(digest string) (string, error) {
 }
 
 func (r *resolver) resolve(ctx context.Context, actionID, digest, projectID string) (string, error) {
+	if _, ok := r.cfg.secretForProject(projectID); !ok {
+		return "", resolveFailed("project secret unavailable")
+	}
 	hexDigest, err := digestHex(digest)
 	if err != nil {
 		return "", err
 	}
 
-	if body, ok := r.fromCache(hexDigest); ok {
+	if body, ok := r.fromCacheForProject(hexDigest, projectID); ok {
 		return body, nil
 	}
 
@@ -62,19 +65,20 @@ func (r *resolver) resolve(ctx context.Context, actionID, digest, projectID stri
 	if sha256Hex(body) != hexDigest {
 		return "", resolveFailed("digest mismatch: fetched body does not hash to script_digest")
 	}
-	r.store(hexDigest, body)
+	r.storeForProject(hexDigest, projectID, body)
 	return body, nil
 }
 
-func (r *resolver) fromCache(hexDigest string) (string, bool) {
+func (r *resolver) fromCacheForProject(hexDigest, projectID string) (string, bool) {
+	key := r.cacheKey(hexDigest, projectID)
 	r.mu.RLock()
-	body, ok := r.memory[hexDigest]
+	body, ok := r.memory[key]
 	r.mu.RUnlock()
 	if ok {
 		return body, true
 	}
 
-	path := r.diskPath(hexDigest)
+	path := r.diskPathForProject(hexDigest, projectID)
 	if path == "" {
 		return "", false
 	}
@@ -88,17 +92,18 @@ func (r *resolver) fromCache(hexDigest string) (string, bool) {
 	}
 	body = string(raw)
 	r.mu.Lock()
-	r.memory[hexDigest] = body
+	r.memory[key] = body
 	r.mu.Unlock()
 	return body, true
 }
 
-func (r *resolver) store(hexDigest, body string) {
+func (r *resolver) storeForProject(hexDigest, projectID, body string) {
+	key := r.cacheKey(hexDigest, projectID)
 	r.mu.Lock()
-	r.memory[hexDigest] = body
+	r.memory[key] = body
 	r.mu.Unlock()
 
-	path := r.diskPath(hexDigest)
+	path := r.diskPathForProject(hexDigest, projectID)
 	if path == "" {
 		return
 	}
@@ -126,11 +131,24 @@ func (r *resolver) store(hexDigest, body string) {
 	}
 }
 
-func (r *resolver) diskPath(hexDigest string) string {
+func (r *resolver) diskPathForProject(hexDigest, projectID string) string {
 	if r.cfg.CacheDir == "" || !hexDigestPattern.MatchString(hexDigest) {
 		return ""
 	}
+	if len(r.cfg.Secrets) > 0 {
+		if !validProjectID(projectID) {
+			return ""
+		}
+		return filepath.Join(r.cfg.CacheDir, strings.ToLower(projectID), hexDigest+".go")
+	}
 	return filepath.Join(r.cfg.CacheDir, hexDigest+".go")
+}
+
+func (r *resolver) cacheKey(hexDigest, projectID string) string {
+	if len(r.cfg.Secrets) == 0 {
+		return hexDigest
+	}
+	return strings.ToLower(projectID) + ":" + hexDigest
 }
 
 type fetchResponse struct {
@@ -143,6 +161,10 @@ type fetchResponse struct {
 // fetch signs the RAW query string (a GET has no body) with the params in the
 // exact contract order: action_id, digest, project_id.
 func (r *resolver) fetch(ctx context.Context, actionID, digest, projectID string) (string, error) {
+	secret, ok := r.cfg.secretForProject(projectID)
+	if !ok {
+		return "", resolveFailed("project secret unavailable")
+	}
 	query := "action_id=" + url.QueryEscape(actionID) +
 		"&digest=" + url.QueryEscape(digest) +
 		"&project_id=" + url.QueryEscape(projectID)
@@ -157,7 +179,7 @@ func (r *resolver) fetch(ctx context.Context, actionID, digest, projectID string
 	if err != nil {
 		return "", resolveFailed("script fetch request could not be built")
 	}
-	request.Header.Set(SignatureHeader, Sign([]byte(query), r.cfg.Secret))
+	request.Header.Set(SignatureHeader, Sign([]byte(query), secret))
 
 	response, err := r.cfg.HTTPClient.Do(request)
 	if err != nil {
@@ -177,7 +199,7 @@ func (r *resolver) fetch(ctx context.Context, actionID, digest, projectID string
 	// The script's integrity rests on the digest, but the channel is signed both
 	// ways: an unsigned or mis-signed response is a hard refuse, so a misconfigured
 	// host fails closed instead of feeding us an attacker's body.
-	if !VerifySignature(response.Header.Get(SignatureHeader), raw, r.cfg.Secret) {
+	if !VerifySignature(response.Header.Get(SignatureHeader), raw, secret) {
 		return "", resolveFailed("script fetch response signature invalid")
 	}
 

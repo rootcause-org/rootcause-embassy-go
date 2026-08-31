@@ -645,8 +645,8 @@ func TestResultCallbackDecode(t *testing.T) {
 		t.Fatalf("ack bytes = %s", recorder.Body)
 	}
 
-	if got.AnalysisID != "33333333-3333-3333-3333-333333333333" || got.SessionID != sessionID {
-		t.Fatalf("ids = %q %q", got.AnalysisID, got.SessionID)
+	if got.AnalysisID != "33333333-3333-3333-3333-333333333333" || got.SessionID != sessionID || got.ProjectID != projectID {
+		t.Fatalf("ids = %q %q %q", got.AnalysisID, got.SessionID, got.ProjectID)
 	}
 	if !strings.HasPrefix(got.Draft, "Your reset link expired") {
 		t.Fatalf("draft = %q", got.Draft)

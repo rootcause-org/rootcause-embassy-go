@@ -3,11 +3,61 @@ package embassy
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestAnalysisClientsSelectProjectSecretInMapMode(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, _ := io.ReadAll(r.Body)
+		secret := map[string]string{mapProjectA: mapSecretA, mapProjectB: mapSecretB}[mapProjectA]
+		if !VerifySignature(r.Header.Get(SignatureHeader), body, secret) {
+			t.Errorf("request signature did not use project key")
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Errorf("body: %v", err)
+		}
+		if _, present := payload["project_id"]; present {
+			t.Error("project_id should be selected locally, not duplicated in the wire body")
+		}
+		if r.URL.Path == "/analyses/demo" {
+			_, _ = w.Write([]byte(`{"analysis_id":"a","session_id":"s","status":"queued"}`))
+		}
+	}))
+	defer server.Close()
+
+	emb, err := New(Config{
+		Secrets:        map[string]string{mapProjectA: mapSecretA, mapProjectB: mapSecretB},
+		FetchURL:       "https://app.replypen.com/actions/script",
+		TriggerURL:     server.URL + "/analyses/demo",
+		SentMessageURL: server.URL + "/analyses/demo/sent-message",
+		Now:            func() time.Time { return mapReferenceClock },
+		Nonce:          func() string { return "map-client-nonce" },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := emb.StartAnalysis(context.Background(), AnalysisRequest{ProjectID: mapProjectA, Body: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := emb.CaptureSentMessage(context.Background(), SentMessageRequest{ProjectID: mapProjectA, SessionID: "s", SentBody: "sent"}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	if _, err := emb.StartAnalysis(context.Background(), AnalysisRequest{ProjectID: "33333333-3333-3333-3333-333333333333", Body: "unknown"}); err == nil {
+		t.Fatal("unknown project was accepted")
+	}
+}
 
 // Everything below must fail BEFORE a byte leaves the process — the server here
 // exists only to prove nothing was sent.

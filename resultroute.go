@@ -33,25 +33,40 @@ func (e *Embassy) ResultHandler() http.Handler {
 
 		raw, err := io.ReadAll(io.LimitReader(r.Body, maxInvocationBytes))
 		if err != nil {
-			e.writeSigned(w, 400, refusalEnvelope{Error: wireError{Class: ClassInvalidRequest, Message: "request body could not be read"}})
+			secret, selected := e.inboundSecret(nil)
+			if selected {
+				e.writeSigned(w, 400, refusalEnvelope{Error: wireError{Class: ClassInvalidRequest, Message: "request body could not be read"}}, secret)
+			} else {
+				e.writeUnsigned(w, http.StatusUnauthorized, refusalEnvelope{Error: wireError{Class: ClassBadSignature, Message: "signature missing or invalid"}})
+			}
 			return
 		}
 
-		status, payload := e.receiveResult(r.Context(), raw, r.Header.Get(SignatureHeader))
-		e.writeSigned(w, status, payload)
+		status, payload, secret := e.receiveResult(r.Context(), raw, r.Header.Get(SignatureHeader))
+		if secret == "" {
+			e.writeUnsigned(w, status, payload)
+			return
+		}
+		e.writeSigned(w, status, payload, secret)
 	})
 }
 
-func (e *Embassy) receiveResult(ctx context.Context, raw []byte, signature string) (int, any) {
-	if !VerifySignature(signature, raw, e.cfg.Secret) {
+func (e *Embassy) receiveResult(ctx context.Context, raw []byte, signature string) (int, any, string) {
+	secret, selected := e.inboundSecret(raw)
+	if !selected {
+		refusal := badSignature("signature missing or invalid")
+		e.logRefusal(refusal, raw)
+		return refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}}, ""
+	}
+	if !VerifySignature(signature, raw, secret) {
 		refusal := badSignature("signature missing or invalid")
 		e.logRefusal(refusal, nil)
-		return refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}}
+		return refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}}, secret
 	}
 
 	var payload resultPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return e.resultRefusal(invalidRequest("body is not valid JSON"))
+		return e.resultRefusal(invalidRequest("body is not valid JSON"), secret)
 	}
 	var missing []string
 	for field, value := range map[string]string{
@@ -63,17 +78,17 @@ func (e *Embassy) receiveResult(ctx context.Context, raw []byte, signature strin
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return e.resultRefusal(invalidRequest("missing field(s): %s", strings.Join(missing, ", ")))
+		return e.resultRefusal(invalidRequest("missing field(s): %s", strings.Join(missing, ", ")), secret)
 	}
 
 	// A stale issued_at is STILL a 409 here: idempotency relaxes the nonce rule,
 	// never the freshness envelope.
 	if err := checkFreshness(payload.IssuedAt, e.cfg.ClockSkew, e.cfg.Now()); err != nil {
-		return e.resultRefusal(asError(err))
+		return e.resultRefusal(asError(err), secret)
 	}
 	unseen, err := recordNonce(payload.Nonce, e.cfg.NonceStore, e.cfg.ClockSkew)
 	if err != nil {
-		return e.resultRefusal(asError(err))
+		return e.resultRefusal(asError(err), secret)
 	}
 	if !unseen {
 		// The host deliberately sends a STABLE nonce = run_id across redeliveries so
@@ -81,7 +96,7 @@ func (e *Embassy) receiveResult(ctx context.Context, raw []byte, signature strin
 		// signed 200 the first delivery got — refusing it would make the host retry
 		// forever against a healthy Embassy.
 		e.logger().Info("rootcause result redelivery acked", "analysis_id", payload.AnalysisID)
-		return http.StatusOK, ackEnvelope{OK: true}
+		return http.StatusOK, ackEnvelope{OK: true}, secret
 	}
 
 	// The nonce is consumed BEFORE dispatch so two concurrent redeliveries cannot
@@ -91,10 +106,10 @@ func (e *Embassy) receiveResult(ctx context.Context, raw []byte, signature strin
 		e.cfg.NonceStore.Delete(payload.Nonce)
 		var refusal *Error
 		if errors.As(err, &refusal) {
-			return e.resultRefusal(refusal)
+			return e.resultRefusal(refusal, secret)
 		}
 		e.logger().Error("rootcause result handler failed", "analysis_id", payload.AnalysisID, "error_type", typeName(err))
-		return http.StatusInternalServerError, refusalEnvelope{Error: wireError{Class: ClassInternalError, Message: typeName(err)}}
+		return http.StatusInternalServerError, refusalEnvelope{Error: wireError{Class: ClassInternalError, Message: typeName(err)}}, secret
 	}
 
 	e.logger().Info("rootcause result dispatched",
@@ -102,7 +117,7 @@ func (e *Embassy) receiveResult(ctx context.Context, raw []byte, signature strin
 		"metadata_keys", sortedKeys(payload.Metadata),
 		"ok", payload.Decline == nil,
 	)
-	return http.StatusOK, ackEnvelope{OK: true}
+	return http.StatusOK, ackEnvelope{OK: true}, secret
 }
 
 // dispatchResult runs the customer handler under the configured timeout and
@@ -142,7 +157,7 @@ func (e *Embassy) dispatchResult(ctx context.Context, payload resultPayload) (er
 	}
 }
 
-func (e *Embassy) resultRefusal(refusal *Error) (int, any) {
+func (e *Embassy) resultRefusal(refusal *Error, secret string) (int, any, string) {
 	e.logRefusal(refusal, nil)
-	return refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}}
+	return refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}}, secret
 }

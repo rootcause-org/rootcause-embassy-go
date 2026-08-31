@@ -25,8 +25,9 @@ go get github.com/rootcause-org/rootcause-embassy-go
 
 ## Configure
 
-One `embassy.New` at boot. It validates **fail-closed** — a missing secret, a placeholder fetch URL or
-a chat key equal to the action key is a boot error, not a first-invocation surprise.
+One `embassy.New` at boot. It validates **fail-closed** — configure exactly one non-blank `Secret` or
+non-empty `Secrets` project map. A missing fetch URL, placeholder URL, or chat key equal to an action
+key is a boot error, not a first-invocation surprise.
 
 ```go
 package main
@@ -50,6 +51,8 @@ func main() {
 		//   ChatSecret      ROOTCAUSE_CHAT_SECRET        (the project's webhook_secret — NOT Secret)
 		//   ChatProject     ROOTCAUSE_CHAT_PROJECT
 		//   ChatBaseURL     ROOTCAUSE_CHAT_BASE_URL
+		// For a shared mount, use Secrets instead of Secret:
+		//   Secrets: map[string]string{"project-uuid": "project-reverse-secret"}
 		Logger:        slog.Default(),
 		ResultHandler: handleAnalysisResult,
 		Symbols: map[string]any{
@@ -70,7 +73,10 @@ func main() {
 ```
 
 Both action lines are needed: Go's `ServeMux` matches an exact pattern, and the health child lives one
-segment below the mount.
+segment below the mount. In map mode, host action/result bodies must carry a configured `project_id`;
+missing, malformed, unknown, or sibling-project signatures receive opaque unsigned refusals. Health
+uses the same selector in its signed raw query (`?project_id=<uuid>`). Single-secret mode keeps accepting
+legacy result callbacks and empty-query health probes.
 
 ## Writing an action script
 
@@ -158,15 +164,16 @@ leaves time for a signed answer inside the host's 25s one-shot wait.
   IP in your load balancer / firewall and keep the HMAC as defense in depth.
 - **The timeout is a backstop, not a transaction boundary.** It can fire mid-transaction. Actions must
   be idempotent and safe to re-run.
-- **Three keys, no fallback.** `Secret` (actions + analysis), `ChatSecret` (chat tokens only), `APIKey`
-  (API bearer). None ever substitutes for another; boot validation refuses a chat key equal to the
-  action key.
+- **Three keys, no fallback.** `Secret`/`Secrets` (actions + analysis), `ChatSecret` (chat tokens only),
+  `APIKey` (API bearer). None ever substitutes for another; boot validation refuses a chat key equal to
+  an action key.
 - **Never log a secret.** The package logs identifiers, param KEYS, byte counts and statuses only.
 
 ## Async analysis
 
 ```go
 analysis, err := emb.StartAnalysis(ctx, embassy.AnalysisRequest{
+	ProjectID: ticket.ProjectID, // required when Config.Secrets is used; selects the local HMAC key
 	Subject:  ticket.Subject,
 	Body:     ticket.Body,
 	Metadata: map[string]any{"resource_type": "SupportTicket", "resource_id": ticket.ID},
@@ -207,6 +214,7 @@ When a human sends the reply — and/or answers the run's questions — hand it 
 
 ```go
 emb.CaptureSentMessage(ctx, embassy.SentMessageRequest{
+	ProjectID:    ticket.ProjectID, // required when Config.Secrets is used
 	SessionID:    ticket.RootcauseSessionID,
 	SentBody:     reply.Body,       // what actually left the building
 	ProposedBody: ticket.Draft,     // what rootcause proposed; omit for pure signal

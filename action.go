@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -67,8 +68,10 @@ func (e *Embassy) ActionHandler() http.Handler {
 }
 
 func (e *Embassy) serveHealth(w http.ResponseWriter, r *http.Request) {
-	// An unsigned prober learns nothing: no existence leak, no vocabulary.
-	if r.Method != http.MethodGet || !VerifySignature(r.Header.Get(SignatureHeader), []byte(r.URL.RawQuery), e.cfg.Secret) {
+	secret, selected := e.healthSecret(r.URL.RawQuery)
+	// An unsigned prober learns nothing: no existence leak, no vocabulary. Map
+	// selector failures also cannot be signed because no project key was found.
+	if r.Method != http.MethodGet || !selected || !VerifySignature(r.Header.Get(SignatureHeader), []byte(r.URL.RawQuery), secret) {
 		http.NotFound(w, r)
 		return
 	}
@@ -78,7 +81,18 @@ func (e *Embassy) serveHealth(w http.ResponseWriter, r *http.Request) {
 		Version:      Version,
 		Protocol:     Protocol,
 		Capabilities: []string{"actions", "dry_run", "analysis_result", "health"},
-	})
+	}, secret)
+}
+
+func (e *Embassy) healthSecret(rawQuery string) (string, bool) {
+	if len(e.cfg.Secrets) == 0 {
+		return e.cfg.secretForProject("")
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil || len(values["project_id"]) != 1 {
+		return "", false
+	}
+	return e.cfg.secretForProject(values.Get("project_id"))
 }
 
 func (e *Embassy) serveInvocation(w http.ResponseWriter, r *http.Request) {
@@ -91,22 +105,47 @@ func (e *Embassy) serveInvocation(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxInvocationBytes))
 	if err != nil {
-		e.writeSigned(w, 400, refusalEnvelope{Error: wireError{Class: ClassInvalidRequest, Message: "request body could not be read"}})
+		secret, selected := e.inboundSecret(nil)
+		if selected {
+			e.writeSigned(w, 400, refusalEnvelope{Error: wireError{Class: ClassInvalidRequest, Message: "request body could not be read"}}, secret)
+		} else {
+			e.writeUnsigned(w, http.StatusUnauthorized, refusalEnvelope{Error: wireError{Class: ClassBadSignature, Message: "signature missing or invalid"}})
+		}
 		return
 	}
 
-	envelope, refusal := e.invoke(ctx, raw, r.Header.Get(SignatureHeader), started)
+	secret, selected := e.inboundSecret(raw)
+	if !selected {
+		e.writeUnsigned(w, http.StatusUnauthorized, refusalEnvelope{Error: wireError{Class: ClassBadSignature, Message: "signature missing or invalid"}})
+		return
+	}
+	envelope, refusal := e.invoke(ctx, raw, r.Header.Get(SignatureHeader), started, secret)
 	if refusal != nil {
 		e.logRefusal(refusal, raw)
-		e.writeSigned(w, refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}})
+		e.writeSigned(w, refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}}, secret)
 		return
 	}
-	e.writeSigned(w, http.StatusOK, envelope)
+	e.writeSigned(w, http.StatusOK, envelope, secret)
 }
 
-func (e *Embassy) invoke(ctx context.Context, raw []byte, signature string, started time.Time) (resultEnvelope, *Error) {
+func (e *Embassy) inboundSecret(raw []byte) (string, bool) {
+	if len(e.cfg.Secrets) == 0 {
+		return e.cfg.secretForProject("")
+	}
+	parsed, err := decodeJSONObject(raw)
+	if err != nil {
+		return "", false
+	}
+	projectID, ok := parsed["project_id"].(string)
+	if !ok {
+		return "", false
+	}
+	return e.cfg.secretForProject(projectID)
+}
+
+func (e *Embassy) invoke(ctx context.Context, raw []byte, signature string, started time.Time, secret string) (resultEnvelope, *Error) {
 	// Verify FIRST, parse second: never spend work on an unauthenticated body.
-	if !VerifySignature(signature, raw, e.cfg.Secret) {
+	if !VerifySignature(signature, raw, secret) {
 		return resultEnvelope{}, badSignature("signature missing or invalid")
 	}
 
@@ -247,15 +286,23 @@ func writeMethodNotAllowed(w http.ResponseWriter) {
 }
 
 // writeSigned marshals once, signs those exact bytes, and writes those exact
-// bytes — including for a refusal. There is no unsigned answer on a signed plane.
-func (e *Embassy) writeSigned(w http.ResponseWriter, status int, payload any) {
+// bytes — including for a refusal. Selector failures use writeUnsigned because
+// no project key exists with which to sign their opaque refusal.
+func (e *Embassy) writeSigned(w http.ResponseWriter, status int, payload any, secret string) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		body = []byte(`{"ok":false,"error":{"class":"` + ClassInternalError + `","message":"` + typeName(err) + `"}}`)
 		status = http.StatusInternalServerError
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set(SignatureHeader, Sign(body, e.cfg.Secret))
+	w.Header().Set(SignatureHeader, Sign(body, secret))
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+func (e *Embassy) writeUnsigned(w http.ResponseWriter, status int, payload any) {
+	body, _ := json.Marshal(payload)
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 }

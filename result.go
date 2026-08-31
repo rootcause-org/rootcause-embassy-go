@@ -11,6 +11,10 @@ package embassy
 //     never as confirm buttons.
 type Result struct {
 	AnalysisID string
+	// ProjectID identifies the host project that emitted this callback. It is
+	// present on newly emitted callbacks and optional for single-secret legacy
+	// callbacks.
+	ProjectID string
 	// SessionID is the host-managed continuity handle — opaque here. Persist it and
 	// pass it back on the next turn; the host holds the prior messages.
 	SessionID string
@@ -95,6 +99,7 @@ const noteKeySummary = "summary"
 type resultPayload struct {
 	AnalysisID string           `json:"analysis_id"`
 	SessionID  string           `json:"session_id"`
+	ProjectID  string           `json:"project_id"`
 	Draft      *draftPayload    `json:"draft"`
 	Notes      []notePayload    `json:"notes"`
 	Actions    []Action         `json:"actions"`
@@ -126,6 +131,7 @@ type notePayload struct {
 func (p resultPayload) toResult() Result {
 	result := Result{
 		AnalysisID:      p.AnalysisID,
+		ProjectID:       p.ProjectID,
 		SessionID:       p.SessionID,
 		Metadata:        p.Metadata,
 		Actions:         p.Actions,
