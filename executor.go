@@ -13,14 +13,17 @@ import (
 	"github.com/traefik/yaegi/stdlib"
 )
 
-// ActionAPI is what a script receives: the host-stamped tenant tuple, the writer
-// whose bytes become the wire `stdout`, and the run's deadline-bearing context.
+// ActionAPI is what a script receives: host-stamped tenant and principal context,
+// the writer whose bytes become the wire `stdout`, and the run deadline.
 //
 // Tenant() is the ONLY trustworthy source of tenant identity — never read a
 // tenant from params.
 type ActionAPI interface {
 	// Tenant returns the trusted tuple, or nil on a flat (non-tenant) project.
 	Tenant() *TenantContext
+	// Principal returns the host-stamped identity assertion, or nil when the
+	// invocation has no requester-bound scope.
+	Principal() *PrincipalContext
 	// Out is captured into the result's `stdout`, truncated at MaxStdoutBytes.
 	Out() io.Writer
 	// Context carries the invocation deadline. A script doing its own I/O should
@@ -34,17 +37,19 @@ type ActionAPI interface {
 }
 
 type actionAPI struct {
-	tenant   *TenantContext
-	out      io.Writer
-	ctx      context.Context
-	actionID string
+	tenant    *TenantContext
+	principal *PrincipalContext
+	out       io.Writer
+	ctx       context.Context
+	actionID  string
 }
 
-func (a *actionAPI) Tenant() *TenantContext   { return a.tenant }
-func (a *actionAPI) Out() io.Writer           { return a.out }
-func (a *actionAPI) Context() context.Context { return a.ctx }
-func (a *actionAPI) ActionID() string         { return a.actionID }
-func (a *actionAPI) DryRun() bool             { return false }
+func (a *actionAPI) Tenant() *TenantContext       { return a.tenant }
+func (a *actionAPI) Principal() *PrincipalContext { return a.principal }
+func (a *actionAPI) Out() io.Writer               { return a.out }
+func (a *actionAPI) Context() context.Context     { return a.ctx }
+func (a *actionAPI) ActionID() string             { return a.actionID }
+func (a *actionAPI) DryRun() bool                 { return false }
 
 // execResult is the executor's half of the wire envelope.
 type execResult struct {
@@ -65,10 +70,16 @@ const trampolineSource = `package rcrun
 import (
 	"action"
 	"rcbridge"
+	"os"
 )
 
 func Invoke() {
-	a, p := rcbridge.Args()
+	a, p, env := rcbridge.Args()
+	os.Clearenv()
+	defer os.Clearenv()
+	for name, value := range env {
+		_ = os.Setenv(name, value)
+	}
 	rcbridge.Capture(action.Run(a, p))
 }
 `
@@ -86,10 +97,11 @@ const (
 type program struct {
 	interp *interp.Interpreter
 
-	api       ActionAPI
-	params    map[string]any
-	returned  any
-	returnErr error
+	api          ActionAPI
+	params       map[string]any
+	principalEnv map[string]string
+	returned     any
+	returnErr    error
 }
 
 // executor memoizes parsed programs per digest. Different digests always run
@@ -112,15 +124,26 @@ func newExecutor(cfg *Config) *executor {
 	return &executor{cfg: cfg, pools: map[string]*programPool{}}
 }
 
-// poolKey binds a pooled interpreter to ONE tenant as well as one script body.
-// A pooled interpreter keeps the script's package-level state between runs, so
-// sharing one across tenants would be a cross-tenant bleed if a script ever held
-// state in a package var. The trusted tuple itself is always passed per run.
-func poolKey(hexDigest string, tenant *TenantContext) string {
-	if tenant == nil {
+// poolKey binds a pooled interpreter to its complete trusted scope. Scripts may
+// retain package state, so a principal-less run must never inherit a prior
+// principal assertion through an interpreter reused for a different scope.
+func poolKey(hexDigest string, tenant *TenantContext, principal *PrincipalContext) string {
+	if tenant == nil && principal == nil {
 		return hexDigest
 	}
-	return hexDigest + "\x00" + tenant.ID
+	scope := ""
+	if tenant != nil {
+		scope += tenant.ID + "\x00" + tenant.Slug + "\x00" + tenant.ScopeValue
+	}
+	if principal != nil {
+		encoded, _ := json.Marshal(struct {
+			Kind       string         `json:"kind"`
+			ExternalID string         `json:"external_id"`
+			Claims     map[string]any `json:"claims"`
+		}{principal.kind, principal.externalID, principal.claims})
+		scope += "\x00" + sha256Hex(string(encoded))
+	}
+	return hexDigest + "\x00" + scope
 }
 
 // maxPools bounds how many (digest, tenant) pairs keep warm interpreters. Each
@@ -169,8 +192,9 @@ func (p *programPool) put(prog *program) {
 // run executes a digest-verified script body. It never panics and never returns
 // an error: every outcome — script error, panic, deadline, non-serializable
 // return — becomes a structured failure envelope.
-func (e *executor) run(ctx context.Context, script, hexDigest, actionID string, tenant *TenantContext, params map[string]any) (result execResult) {
+func (e *executor) run(ctx context.Context, script, hexDigest, actionID string, tenant *TenantContext, principal *PrincipalContext, params map[string]any) (result execResult) {
 	out := newCappedWriter(e.cfg.MaxStdoutBytes)
+	var err error
 
 	defer func() {
 		// Backstop: a panic escaping yaegi's own recover must still be a signed
@@ -181,21 +205,21 @@ func (e *executor) run(ctx context.Context, script, hexDigest, actionID string, 
 		}
 	}()
 
-	pool := e.poolFor(poolKey(hexDigest, tenant))
+	pool := e.poolFor(poolKey(hexDigest, tenant, principal))
 	prog := pool.get()
 	if prog == nil {
-		var err error
 		prog, err = e.compile(script)
 		if err != nil {
 			return execResult{stdout: out.String(), errClass: "compile_error", errMessage: err.Error()}
 		}
 	}
 
-	prog.api = &actionAPI{tenant: tenant, out: out, ctx: ctx, actionID: actionID}
+	prog.api = &actionAPI{tenant: tenant, principal: principal, out: out, ctx: ctx, actionID: actionID}
 	prog.params = params
+	prog.principalEnv = principalEnvironment(principal)
 	prog.returned, prog.returnErr = nil, nil
 
-	_, err := prog.interp.EvalWithContext(ctx, invokeExprText)
+	_, err = prog.interp.EvalWithContext(ctx, invokeExprText)
 	if err == nil {
 		// Reuse ONLY a cleanly finished program. Cancellation returns while yaegi's
 		// eval goroutine is still unwinding (its stop is cooperative, not a join), so
@@ -243,14 +267,17 @@ func (e *executor) compile(script string) (*program, error) {
 	}
 	if err := prog.interp.Use(interp.Exports{
 		embassyPkgKey: {
-			"ActionAPI":     reflect.ValueOf((*ActionAPI)(nil)),
-			"TenantContext": reflect.ValueOf((*TenantContext)(nil)),
+			"ActionAPI":        reflect.ValueOf((*ActionAPI)(nil)),
+			"TenantContext":    reflect.ValueOf((*TenantContext)(nil)),
+			"PrincipalContext": reflect.ValueOf((*PrincipalContext)(nil)),
 		},
 		bridgePkgKey: {
 			// Read through a function, not a variable: yaegi binds an exported var
 			// by value at Use time, so a per-run var would hand the script stale
 			// arguments.
-			"Args":    reflect.ValueOf(func() (ActionAPI, map[string]any) { return prog.api, prog.params }),
+			"Args": reflect.ValueOf(func() (ActionAPI, map[string]any, map[string]string) {
+				return prog.api, prog.params, prog.principalEnv
+			}),
 			"Capture": reflect.ValueOf(func(v any, err error) { prog.returned, prog.returnErr = v, err }),
 		},
 		symbolsPkgKey: e.symbolExports(),

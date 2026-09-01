@@ -165,6 +165,10 @@ func (e *Embassy) invoke(ctx context.Context, raw []byte, signature string, star
 	if err != nil {
 		return resultEnvelope{}, asError(err)
 	}
+	principal, err := validatePrincipal(invocation.raw)
+	if err != nil {
+		return resultEnvelope{}, asError(err)
+	}
 
 	if err := checkFreshness(invocation.IssuedAt, e.cfg.ClockSkew, e.cfg.Now()); err != nil {
 		return resultEnvelope{}, asError(err)
@@ -208,7 +212,7 @@ func (e *Embassy) invoke(ctx context.Context, raw []byte, signature string, star
 
 	execCtx, cancel := context.WithTimeout(ctx, e.cfg.Timeout)
 	defer cancel()
-	outcome := e.executor.run(execCtx, script, hexDigest, invocation.ActionID, tenant, params)
+	outcome := e.executor.run(execCtx, script, hexDigest, invocation.ActionID, tenant, principal, params)
 
 	envelope := resultEnvelope{
 		OK:          outcome.ok,

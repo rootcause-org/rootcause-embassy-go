@@ -56,6 +56,32 @@ func Run(a emb.ActionAPI, params map[string]any) (any, error) {
 }
 `
 
+const principalScript = `package action
+
+import (
+	"os"
+	emb "github.com/rootcause-org/rootcause-embassy-go"
+)
+
+func Run(a emb.ActionAPI, params map[string]any) (any, error) {
+	p := a.Principal()
+	if p == nil {
+		return map[string]any{"present": false, "env_kind": os.Getenv("RC_PRINCIPAL_KIND")}, nil
+	}
+	if params["email"] == "clear@acme.com" {
+		os.Clearenv()
+	}
+	userID, _ := p.Claim("user_id")
+	backupIDs, _ := p.Claim("backup_ids")
+	return map[string]any{
+		"present": true, "kind": p.Kind(), "external_id": p.ExternalID(),
+		"user_id": userID, "backup_ids": backupIDs,
+		"env_kind": os.Getenv("RC_PRINCIPAL_KIND"),
+		"env_user_id": os.Getenv("RC_PRINCIPAL_CLAIM_USER_ID"),
+	}, nil
+}
+`
+
 func TestMain(m *testing.M) {
 	sha, err := os.ReadFile(filepath.Join("testdata", "HUB_SHA"))
 	if err != nil {
@@ -346,6 +372,60 @@ func TestTenantTupleReachesTheScript(t *testing.T) {
 	}
 }
 
+func TestPrincipalFixtureReachesOnlyItsInvocation(t *testing.T) {
+	host := newFakeHost(t, principalScript)
+	emb := newEmbassy(t, host, nil)
+
+	var principalInvocation map[string]any
+	if err := json.Unmarshal(fixture(t, "actions/invocation_principal.json"), &principalInvocation); err != nil {
+		t.Fatal(err)
+	}
+	principalInvocation["runtime"] = "go"
+	principalInvocation["script_digest"] = host.digest
+	principalInvocation["nonce"] = "principal-env-clear"
+	principalInvocation["params"] = map[string]any{"email": "clear@acme.com"}
+	principalBody, err := json.Marshal(principalInvocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := postSigned(t, emb.ActionHandler(), principalBody, embassy.Sign(principalBody, reverseSecret))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("principal environment-clear status = %d: %s", recorder.Code, recorder.Body)
+	}
+
+	if err := json.Unmarshal(fixture(t, "actions/invocation_principal.json"), &principalInvocation); err != nil {
+		t.Fatal(err)
+	}
+	principalInvocation["runtime"] = "go"
+	principalInvocation["script_digest"] = host.digest
+	principalInvocation["nonce"] = "principal-fixture"
+	principalBody, err = json.Marshal(principalInvocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder = postSigned(t, emb.ActionHandler(), principalBody, embassy.Sign(principalBody, reverseSecret))
+	assertSigned(t, recorder)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("principal status = %d: %s", recorder.Code, recorder.Body)
+	}
+	var principalEnvelope struct {
+		ReturnValue map[string]any `json:"return_value"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &principalEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if principalEnvelope.ReturnValue["kind"] != "acme_user" || principalEnvelope.ReturnValue["external_id"] != "user-8f3" || principalEnvelope.ReturnValue["user_id"] != "user-8f3" || principalEnvelope.ReturnValue["env_kind"] != "acme_user" || principalEnvelope.ReturnValue["env_user_id"] != "user-8f3" {
+		t.Fatalf("principal return value = %s", recorder.Body)
+	}
+
+	flatBody := invocationBody(t, host, nil)
+	recorder = postSigned(t, emb.ActionHandler(), flatBody, embassy.Sign(flatBody, reverseSecret))
+	assertSigned(t, recorder)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"present":false`) || !strings.Contains(recorder.Body.String(), `"env_kind":""`) {
+		t.Fatalf("principal-less invocation inherited context: %d %s", recorder.Code, recorder.Body)
+	}
+}
+
 func TestDryRunMatchesGolden(t *testing.T) {
 	host := newFakeHost(t, goScript)
 	emb := newEmbassy(t, host, nil)
@@ -510,6 +590,28 @@ func TestRefusalEnvelopes(t *testing.T) {
 		})
 		recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
 		assertClass(t, recorder, 422, embassy.ClassSchemaViolation)
+	})
+
+	t.Run("reserved_principal_param", func(t *testing.T) {
+		host := newFakeHost(t, goScript)
+		emb := newEmbassy(t, host, nil)
+		body := invocationBody(t, host, map[string]any{
+			"params": map[string]any{"email": "x@acme.com", "RC_Principal_User_ID": "sneaky"},
+			"schema": map[string]any{
+				"email":                map[string]any{"type": "string", "required": true},
+				"RC_Principal_User_ID": map[string]any{"type": "string"},
+			},
+		})
+		recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
+		assertClass(t, recorder, 422, embassy.ClassSchemaViolation)
+	})
+
+	t.Run("malformed_principal", func(t *testing.T) {
+		host := newFakeHost(t, goScript)
+		emb := newEmbassy(t, host, nil)
+		body := invocationBody(t, host, map[string]any{"principal": map[string]any{"kind": "acme_user"}})
+		recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
+		assertClass(t, recorder, 400, embassy.ClassInvalidRequest)
 	})
 
 	t.Run("partial_tenant_tuple", func(t *testing.T) {

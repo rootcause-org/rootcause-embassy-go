@@ -12,15 +12,17 @@ var schemaTypes = map[string]bool{
 	"string": true, "integer": true, "number": true, "boolean": true, "string[]": true,
 }
 
-// Reserved names the host owns. Params select an in-tenant target, never the
-// tenant itself, so these are refused in BOTH params and schema, case-insensitively.
+// Reserved names carry host-stamped scope. Params select a target inside that
+// scope, so these are refused in BOTH params and schema, case-insensitively.
 var reservedTenantParams = map[string]bool{
 	"tenant_id": true, "tenant_slug": true, "tenant_scope_value": true,
 }
 
 func isReservedTenantParam(name string) bool {
 	canonical := strings.ToLower(name)
-	return reservedTenantParams[canonical] || strings.HasPrefix(canonical, "rc_tenant_")
+	return reservedTenantParams[canonical] || strings.HasPrefix(canonical, "rc_tenant_") ||
+		canonical == "principal_kind" || canonical == "principal_external_id" ||
+		strings.HasPrefix(canonical, "rc_principal_")
 }
 
 type paramSpec struct {
@@ -66,7 +68,7 @@ func validateParams(rawParams, rawSchema any) (map[string]any, error) {
 	}
 	if len(reserved) > 0 {
 		sort.Strings(reserved)
-		return nil, schemaViolation("tenant scope is host-owned; reserved param(s): %s", strings.Join(reserved, ", "))
+		return nil, schemaViolation("tenant and principal scope are host-owned; reserved param(s): %s", strings.Join(reserved, ", "))
 	}
 
 	var unknown []string

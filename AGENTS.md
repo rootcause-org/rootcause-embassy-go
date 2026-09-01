@@ -22,10 +22,10 @@ rules an agent changing it must follow.
 | `config.go` | every knob, `ROOTCAUSE_*` env fallbacks, fail-closed boot validation |
 | `signature.go` | HMAC-SHA256, `X-Webhook-Signature`, constant-time verify, blank-key floor |
 | `replay.go` | freshness window, `NonceStore` + the default in-memory store |
-| `schema.go` | map-form param re-validation, reserved tenant names, type normalization |
-| `tenant.go` | the trusted tuple: all-or-nothing, UUID/slug shape, NUL refusal |
+| `schema.go` | map-form param re-validation, reserved tenant/principal names, type normalization |
+| `tenant.go` / `principal.go` | trusted host scope: tenant tuple and optional typed principal validation |
 | `resolver.go` | script by digest: memory → disk → signed GET, re-hash everywhere |
-| `executor.go` | yaegi: `ActionAPI`, the bridge/trampoline, per-digest program pool, stdout cap |
+| `executor.go` | yaegi: typed `ActionAPI` scope, bridge/trampoline, scope-isolated program pool, stdout cap |
 | `action.go` | the invocation route: verify → parse → tenant → replay → schema → resolve → run |
 | `result.go` | the `Result` value type and the tolerant result decode |
 | `resultroute.go` | the result route, incl. the idempotent-ack + nonce-release rule |
@@ -48,6 +48,9 @@ rules an agent changing it must follow.
   `fmt.Println` in a script is NOT captured. This is what lets executions run concurrently.
 - **The tenant tuple** reaches a script as a typed argument, never through `RC_TENANT_*` env — the
   contract makes the mechanism explicitly language-local (hub decision 9).
+- **The principal** reaches scripts as a frozen `ActionAPI.Principal()` value and the contract's
+  `RC_PRINCIPAL_*` virtual environment. Each scope-keyed Yaegi program starts with only this invocation's
+  values, so a principal-less or concurrent invocation cannot observe a prior one.
 - **`runtime`** must be `go`; the hub's invocation fixtures declare `ruby` and are therefore refused
   with `400 invalid_request` here, which is the contract's own rule (hub decision 8).
 - **Execution-failure `error.class` values** inside a `200` result envelope (`timeout`, `panic`,

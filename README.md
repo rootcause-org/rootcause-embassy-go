@@ -133,6 +133,14 @@ func Run(a embassy.ActionAPI, params map[string]any) (any, error) {
 	if t := a.Tenant(); t != nil {
 		scope = t.ScopeValue
 	}
+	// A requester-bound action may also receive a host-resolved principal. It is
+	// never selected from params; nil means this was a reviewer/admin invocation.
+	if p := a.Principal(); p != nil {
+		if userID, ok := p.Claim("user_id"); ok {
+			// Scope any caller-specific write with this typed host assertion.
+			_ = userID
+		}
+	}
 
 	user, err := rcsymbols.DB.FindUser(a.Context(), email, scope)
 	if err != nil {
@@ -159,8 +167,8 @@ Notes:
   `a.Out()` for anything you want in the result.
 - **A panic is recovered** into a structured failure result. It never crashes your server.
 - **Do not keep per-run state in a package-level var.** Interpreters are memoized per script digest
-  (and per tenant), so a package var survives between runs of the same action. Keep everything a run
-  needs in `Run`.
+  and trusted scope, so a package var survives between equal-scope runs. Keep everything a run needs
+  in `Run`.
 - Types your script touches must come from the standard library or from `Config.Symbols`.
 
 ## What it does, in order (fail-closed at every step)

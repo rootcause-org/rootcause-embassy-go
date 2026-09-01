@@ -12,7 +12,7 @@ func runScript(t *testing.T, exec *executor, script string, params map[string]an
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.run(ctx, script, sha256Hex(script), "demo_action", nil, params)
+	return exec.run(ctx, script, sha256Hex(script), "demo_action", nil, nil, params)
 }
 
 func newTestExecutor(t *testing.T, symbols map[string]any) *executor {
@@ -122,7 +122,7 @@ func Run(a emb.ActionAPI, params map[string]any) (any, error) {
 	defer cancel()
 
 	start := time.Now()
-	result := exec.run(ctx, spin, sha256Hex(spin), "spin", nil, nil)
+	result := exec.run(ctx, spin, sha256Hex(spin), "spin", nil, nil, nil)
 	if result.ok || result.errClass != "timeout" {
 		t.Fatalf("result = %+v", result)
 	}
@@ -149,11 +149,11 @@ func Run(a emb.ActionAPI, params map[string]any) (any, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if result := exec.run(ctx, slow, digest, "a", nil, map[string]any{"slow": true}); result.ok {
+	if result := exec.run(ctx, slow, digest, "a", nil, nil, map[string]any{"slow": true}); result.ok {
 		t.Fatal("the slow run should have timed out")
 	}
 
-	pool := exec.poolFor(poolKey(digest, nil))
+	pool := exec.poolFor(poolKey(digest, nil, nil))
 	if len(pool.free) != 0 {
 		t.Fatal("a timed-out program was returned to the pool")
 	}
@@ -222,7 +222,7 @@ func Run(a emb.ActionAPI, params map[string]any) (any, error) {
 		go func() {
 			defer wg.Done()
 			slug := "tenant-" + string(rune('a'+i%26))
-			result := exec.run(context.Background(), tenantScript, digest, "a", &TenantContext{ID: "id", Slug: slug}, nil)
+			result := exec.run(context.Background(), tenantScript, digest, "a", &TenantContext{ID: "id", Slug: slug}, nil, nil)
 			if !result.ok || result.returnValue != slug {
 				errs <- "got " + strings.TrimSpace(result.errMessage) + " want " + slug
 			}

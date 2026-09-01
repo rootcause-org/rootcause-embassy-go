@@ -93,6 +93,18 @@ func TestValidateParams(t *testing.T) {
 			wantErr: "reserved param(s): rc_tenant_custom",
 		},
 		{
+			name:    "principal selectors are reserved in params",
+			params:  `{"principal_kind":"sneaky"}`,
+			schema:  `{"principal_kind":{"type":"string"}}`,
+			wantErr: "reserved param(s): principal_kind",
+		},
+		{
+			name:    "every rc principal prefix spelling is reserved in the schema",
+			params:  `{}`,
+			schema:  `{"RC_Principal_Custom":{"type":"string"}}`,
+			wantErr: "reserved param(s): RC_Principal_Custom",
+		},
+		{
 			name:    "a missing schema fails closed",
 			params:  `{"email":"x"}`,
 			schema:  ``,
