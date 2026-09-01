@@ -26,6 +26,10 @@ type ackEnvelope struct {
 // second dispatch.
 func (e *Embassy) ResultHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !e.cfg.actionEnabled() {
+			writeActionPlaneDisabled(w)
+			return
+		}
 		if r.Method != http.MethodPost {
 			writeMethodNotAllowed(w)
 			return
@@ -33,11 +37,12 @@ func (e *Embassy) ResultHandler() http.Handler {
 
 		raw, err := io.ReadAll(io.LimitReader(r.Body, maxInvocationBytes))
 		if err != nil {
+			refusal := invalidRequest("request body could not be read")
 			secret, selected := e.inboundSecret(nil)
 			if selected {
-				e.writeSigned(w, 400, refusalEnvelope{Error: wireError{Class: ClassInvalidRequest, Message: "request body could not be read"}}, secret)
+				e.writeSigned(w, 400, refusalEnvelope{Error: wireRefusal(refusal)}, secret)
 			} else {
-				e.writeUnsigned(w, http.StatusUnauthorized, refusalEnvelope{Error: wireError{Class: ClassBadSignature, Message: "signature missing or invalid"}})
+				e.writeUnsigned(w, http.StatusUnauthorized, refusalEnvelope{Error: wireRefusal(badSignature("signature missing or invalid"))})
 			}
 			return
 		}
@@ -56,12 +61,12 @@ func (e *Embassy) receiveResult(ctx context.Context, raw []byte, signature strin
 	if !selected {
 		refusal := badSignature("signature missing or invalid")
 		e.logRefusal(refusal, raw)
-		return refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}}, ""
+		return refusal.Status, refusalEnvelope{Error: wireRefusal(refusal)}, ""
 	}
 	if !VerifySignature(signature, raw, secret) {
 		refusal := badSignature("signature missing or invalid")
 		e.logRefusal(refusal, nil)
-		return refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}}, secret
+		return refusal.Status, refusalEnvelope{Error: wireRefusal(refusal)}, secret
 	}
 
 	var payload resultPayload
@@ -109,7 +114,7 @@ func (e *Embassy) receiveResult(ctx context.Context, raw []byte, signature strin
 			return e.resultRefusal(refusal, secret)
 		}
 		e.logger().Error("rootcause result handler failed", "analysis_id", payload.AnalysisID, "error_type", typeName(err))
-		return http.StatusInternalServerError, refusalEnvelope{Error: wireError{Class: ClassInternalError, Message: typeName(err)}}, secret
+		return http.StatusInternalServerError, refusalEnvelope{Error: wireRefusal(actionError(500, ClassInternalError, typeName(err)))}, secret
 	}
 
 	e.logger().Info("rootcause result dispatched",
@@ -159,5 +164,5 @@ func (e *Embassy) dispatchResult(ctx context.Context, payload resultPayload) (er
 
 func (e *Embassy) resultRefusal(refusal *Error, secret string) (int, any, string) {
 	e.logRefusal(refusal, nil)
-	return refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}}, secret
+	return refusal.Status, refusalEnvelope{Error: wireRefusal(refusal)}, secret
 }

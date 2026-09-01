@@ -1,7 +1,7 @@
 package embassy
 
 import (
-	"strings"
+	"errors"
 	"testing"
 	"time"
 )
@@ -12,55 +12,55 @@ func TestConfigValidationFailsClosedAtBoot(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		mutate  func(*Config)
-		wantErr string
+		name     string
+		mutate   func(*Config)
+		wantCode string
 	}{
 		{name: "valid"},
 		{
-			name:    "a blank secret is forgeable",
-			mutate:  func(c *Config) { c.Secret = "" },
-			wantErr: "Secret is required",
+			name:     "a blank secret is forgeable",
+			mutate:   func(c *Config) { c.Secret = "" },
+			wantCode: "ACTION_SECRET_REQUIRED",
 		},
 		{
-			name:    "the placeholder fetch url",
-			mutate:  func(c *Config) { c.FetchURL = placeholderFetchURL },
-			wantErr: "placeholder",
+			name:     "the placeholder fetch url",
+			mutate:   func(c *Config) { c.FetchURL = placeholderFetchURL },
+			wantCode: "ACTION_FETCH_URL_REQUIRED",
 		},
 		{
-			name:    "any .invalid host is the placeholder",
-			mutate:  func(c *Config) { c.FetchURL = "https://whatever.invalid/x" },
-			wantErr: "placeholder",
+			name:     "any .invalid host is the placeholder",
+			mutate:   func(c *Config) { c.FetchURL = "https://whatever.invalid/x" },
+			wantCode: "ACTION_FETCH_URL_REQUIRED",
 		},
 		{
-			name:    "an unparseable fetch url cannot slip past",
-			mutate:  func(c *Config) { c.FetchURL = "not a url" },
-			wantErr: "placeholder",
+			name:     "an unparseable fetch url cannot slip past",
+			mutate:   func(c *Config) { c.FetchURL = "not a url" },
+			wantCode: "ACTION_FETCH_URL_REQUIRED",
 		},
 		{
-			name:    "the execute backstop must fire inside the invocation budget",
-			mutate:  func(c *Config) { c.Timeout = 30 * time.Second },
-			wantErr: "must exceed Timeout",
+			name:     "the execute backstop must fire inside the invocation budget",
+			mutate:   func(c *Config) { c.Timeout = 30 * time.Second },
+			wantCode: "ACTION_DEADLINE_INVALID",
 		},
 		{
-			name:    "half-wired api plane",
-			mutate:  func(c *Config) { c.APIKey = "rcor_x" },
-			wantErr: "APIBaseURL is required",
+			name:     "half-wired api plane",
+			mutate:   func(c *Config) { c.APIKey = "rcor_x" },
+			wantCode: "API_BASE_URL_REQUIRED",
 		},
 		{
-			name:    "api base url must be absolute",
-			mutate:  func(c *Config) { c.APIKey, c.APIBaseURL = "rcor_x", "app.replypen.com" },
-			wantErr: "absolute http(s) URL",
+			name:     "api base url must be absolute",
+			mutate:   func(c *Config) { c.APIKey, c.APIBaseURL = "rcor_x", "app.replypen.com" },
+			wantCode: "API_BASE_URL_INVALID",
 		},
 		{
-			name:    "half-wired chat",
-			mutate:  func(c *Config) { c.ChatSecret = "chat" },
-			wantErr: "ChatProject is required",
+			name:     "half-wired chat",
+			mutate:   func(c *Config) { c.ChatSecret = "chat" },
+			wantCode: "CHAT_PROJECT_REQUIRED",
 		},
 		{
-			name:    "the chat key must not be the action key",
-			mutate:  func(c *Config) { c.ChatSecret, c.ChatProject = "s3cret", "demo" },
-			wantErr: "must differ from Secret",
+			name:     "the chat key must not be the action key",
+			mutate:   func(c *Config) { c.ChatSecret, c.ChatProject = "s3cret", "demo" },
+			wantCode: "CHAT_SECRET_REUSED",
 		},
 		{
 			name: "fully wired",
@@ -78,10 +78,46 @@ func TestConfigValidationFailsClosedAtBoot(t *testing.T) {
 			}
 			_, err := New(cfg)
 			switch {
-			case test.wantErr == "" && err != nil:
+			case test.wantCode == "" && err != nil:
 				t.Fatalf("unexpected error: %v", err)
-			case test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)):
-				t.Fatalf("error = %v, want %q", err, test.wantErr)
+			case test.wantCode != "":
+				var typed *Error
+				if !errors.As(err, &typed) || typed.Code() != test.wantCode {
+					t.Fatalf("error = %v, want code %q", err, test.wantCode)
+				}
+			}
+		})
+	}
+}
+
+func TestChatOnlyConfigDefaultsAndDisablesActionPlane(t *testing.T) {
+	emb, err := New(Config{ChatSecret: "chat-secret", ChatProject: "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emb.Config().ChatBaseURL != DefaultChatBaseURL {
+		t.Fatalf("ChatBaseURL = %q", emb.Config().ChatBaseURL)
+	}
+	if emb.ActionPlaneEnabled() {
+		t.Fatal("chat-only config enabled the action plane")
+	}
+}
+
+func TestPartialPlaneConfigStillFailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		code string
+	}{
+		{name: "fetch without action secret", cfg: Config{FetchURL: "https://app.replypen.com/actions/script"}, code: "ACTION_SECRET_REQUIRED"},
+		{name: "invalid chat base without other chat fields", cfg: Config{ChatBaseURL: "app.replypen.com"}, code: "CHAT_BASE_URL_INVALID"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := New(test.cfg)
+			var typed *Error
+			if !errors.As(err, &typed) || typed.Code() != test.code {
+				t.Fatalf("error = %v, want code %s", err, test.code)
 			}
 		})
 	}

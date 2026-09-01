@@ -1,4 +1,5 @@
-// Package contract replays the hub's canonical fixtures byte-for-byte.
+// Package contract replays the hub's canonical fixtures. Signed refusal
+// fixtures are the required minimum; ports add code/hint/docs diagnostics.
 //
 // The fixtures in testdata/ are VENDORED from
 // https://github.com/rootcause-org/rootcause-embassy — never edited here. When the
@@ -547,8 +548,27 @@ func assertRefusal(t *testing.T, recorder *httptest.ResponseRecorder, status int
 	if recorder.Code != status {
 		t.Fatalf("status = %d, want %d (body %s)", recorder.Code, status, recorder.Body)
 	}
-	if !bytes.Equal(recorder.Body.Bytes(), golden) {
-		t.Fatalf("refusal bytes differ\n got: %s\nwant: %s", recorder.Body, golden)
+	var got, want struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Class   string `json:"class"`
+			Message string `json:"message"`
+			Code    string `json:"code"`
+			Hint    string `json:"hint"`
+			Docs    string `json:"docs"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(golden, &want); err != nil {
+		t.Fatal(err)
+	}
+	if got.OK || got.Error.Class != want.Error.Class || got.Error.Message != want.Error.Message {
+		t.Fatalf("refusal minimum differs\n got: %s\nwant: %s", recorder.Body, golden)
+	}
+	if got.Error.Code == "" || got.Error.Hint == "" || !strings.HasSuffix(got.Error.Docs, "#"+strings.ToLower(got.Error.Code)) {
+		t.Fatalf("refusal diagnostics incomplete: %s", recorder.Body)
 	}
 }
 
@@ -562,11 +582,17 @@ func assertClass(t *testing.T, recorder *httptest.ResponseRecorder, status int, 
 		OK    bool `json:"ok"`
 		Error struct {
 			Class string `json:"class"`
+			Code  string `json:"code"`
+			Hint  string `json:"hint"`
+			Docs  string `json:"docs"`
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(recorder.Body.Bytes(), &refusal)
 	if refusal.OK || refusal.Error.Class != class {
 		t.Fatalf("refusal = %s, want class %s", recorder.Body, class)
+	}
+	if refusal.Error.Code == "" || refusal.Error.Hint == "" || refusal.Error.Docs == "" {
+		t.Fatalf("refusal diagnostics incomplete: %s", recorder.Body)
 	}
 }
 
@@ -800,9 +826,9 @@ func TestOutboundSerializationMatchesGoldens(t *testing.T) {
 			SessionID:   sessionID,
 			Tenant:      "acme",
 			Principal: &embassy.Principal{
-				Kind:       "kampadmin_admin",
+				Kind:       "acme_user",
 				ExternalID: "user-8f3",
-				AssertedBy: "kampadmin",
+				AssertedBy: "acme",
 				Assurance:  "customer_backend_jwt",
 				TenantHint: "acme",
 			},
@@ -892,10 +918,10 @@ func TestChatJWTVector(t *testing.T) {
 	}
 
 	token, err := chat.MintEmbedToken(vector.Secret, chat.Claims{
-		Project:     "kampadmin",
+		Project:     "acme",
 		ExternalID:  "user-8f3",
-		Kind:        "kampadmin_admin",
-		Origin:      "https://admin.kampadmin.be",
+		Kind:        "acme_user",
+		Origin:      "https://app.acme.example",
 		Tenant:      "acme",
 		Locale:      "nl",
 		ColorScheme: "light",
@@ -915,7 +941,7 @@ func TestChatJWTVector(t *testing.T) {
 
 	tag, err := chat.WidgetTagHTML(chat.Widget{
 		BaseURL:     "https://app.replypen.com",
-		Project:     "kampadmin",
+		Project:     "acme",
 		Token:       token,
 		Mode:        "page",
 		Target:      "#rc-chat",

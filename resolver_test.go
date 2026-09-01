@@ -105,7 +105,7 @@ func TestResolverVerifiesDigestAndSignature(t *testing.T) {
 		server := scriptHost(t, script, false)
 		r := newResolver(testConfig(t, server.URL))
 		if _, err := r.resolve(context.Background(), "a", digest, "p"); err == nil ||
-			!strings.Contains(err.Error(), "signature invalid") {
+			!strings.Contains(err.(*Error).Message, "signature invalid") {
 			t.Fatalf("err = %v", err)
 		}
 	})

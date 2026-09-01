@@ -1,0 +1,7 @@
+:root { color-scheme: light; font-family: system-ui, sans-serif; background: #f7f7f8; color: #1d2025; }
+body { margin: 0; }
+main { box-sizing: border-box; max-width: 960px; min-height: 100vh; margin: auto; padding: 32px; }
+h1 { margin: 0 0 8px; }
+p { color: #59616d; }
+#replypen-chat { height: min(720px, calc(100vh - 180px)); overflow: hidden; border: 1px solid #d9dde3; border-radius: 16px; background: white; }
+#status { font-size: 14px; }

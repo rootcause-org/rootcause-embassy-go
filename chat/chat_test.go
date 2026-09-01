@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -52,24 +53,24 @@ func verify(t *testing.T, token, secret string) map[string]any {
 
 func TestMintDefaultsAndVerification(t *testing.T) {
 	token, err := chat.MintEmbedToken(secret, chat.Claims{
-		Project:    "kampadmin",
+		Project:    "acme",
 		ExternalID: "user-8f3",
-		Kind:       "kampadmin_admin",
-		Origin:     "https://admin.kampadmin.be",
+		Kind:       "acme_user",
+		Origin:     "https://app.acme.example",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	claims := verify(t, token, secret)
 
-	if claims["aud"] != "rootcause:chat:kampadmin" || claims["iss"] != "kampadmin" {
+	if claims["aud"] != "rootcause:chat:acme" || claims["iss"] != "acme" {
 		t.Fatalf("aud/iss = %v %v", claims["aud"], claims["iss"])
 	}
 	if claims["jti"] == "" || claims["exp"] == nil {
 		t.Fatal("jti and exp are required — a missing exp is a refusal, not an infinite token")
 	}
 	principal := claims["principal"].(map[string]any)
-	if principal["asserted_by"] != "kampadmin" || principal["assurance"] != chat.DefaultAssurance {
+	if principal["asserted_by"] != "acme" || principal["assurance"] != chat.DefaultAssurance {
 		t.Fatalf("principal = %v", principal)
 	}
 	// Optional claims are OMITTED, never nulled.
@@ -96,16 +97,18 @@ func TestMintRefusals(t *testing.T) {
 		name   string
 		secret string
 		mutate func(*chat.Claims)
+		code   string
 	}{
-		{name: "blank secret fails closed", secret: ""},
-		{name: "missing project", secret: secret, mutate: func(c *chat.Claims) { c.Project = "" }},
-		{name: "missing external id", secret: secret, mutate: func(c *chat.Claims) { c.ExternalID = "" }},
-		{name: "missing kind", secret: secret, mutate: func(c *chat.Claims) { c.Kind = "" }},
-		{name: "missing origin", secret: secret, mutate: func(c *chat.Claims) { c.Origin = "" }},
-		{name: "origin with a path", secret: secret, mutate: func(c *chat.Claims) { c.Origin = "https://app.example.com/chat" }},
-		{name: "origin with a query", secret: secret, mutate: func(c *chat.Claims) { c.Origin = "https://app.example.com?a=1" }},
-		{name: "non-http origin", secret: secret, mutate: func(c *chat.Claims) { c.Origin = "ftp://app.example.com" }},
-		{name: "negative ttl", secret: secret, mutate: func(c *chat.Claims) { c.TTL = -time.Second }},
+		{name: "blank secret fails closed", secret: "", code: "CHAT_SECRET_REQUIRED"},
+		{name: "missing project", secret: secret, mutate: func(c *chat.Claims) { c.Project = "" }, code: "CHAT_PROJECT_REQUIRED"},
+		{name: "missing external id", secret: secret, mutate: func(c *chat.Claims) { c.ExternalID = "" }, code: "CHAT_EXTERNAL_ID_REQUIRED"},
+		{name: "missing kind", secret: secret, mutate: func(c *chat.Claims) { c.Kind = "" }, code: "PRINCIPAL_REQUIRED"},
+		{name: "missing origin", secret: secret, mutate: func(c *chat.Claims) { c.Origin = "" }, code: "ORIGIN_INVALID"},
+		{name: "origin with a path", secret: secret, mutate: func(c *chat.Claims) { c.Origin = "https://app.example.com/chat" }, code: "ORIGIN_INVALID"},
+		{name: "origin with a query", secret: secret, mutate: func(c *chat.Claims) { c.Origin = "https://app.example.com?a=1" }, code: "ORIGIN_INVALID"},
+		{name: "non-http origin", secret: secret, mutate: func(c *chat.Claims) { c.Origin = "ftp://app.example.com" }, code: "ORIGIN_INVALID"},
+		{name: "negative ttl", secret: secret, mutate: func(c *chat.Claims) { c.TTL = -time.Second }, code: "TOKEN_TTL_INVALID"},
+		{name: "excessive ttl", secret: secret, mutate: func(c *chat.Claims) { c.TTL = chat.MaxTTL + time.Second }, code: "TOKEN_TTL_INVALID"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -113,7 +116,9 @@ func TestMintRefusals(t *testing.T) {
 			if test.mutate != nil {
 				test.mutate(&claims)
 			}
-			if _, err := chat.MintEmbedToken(test.secret, claims); err == nil {
+			_, err := chat.MintEmbedToken(test.secret, claims)
+			var typed *chat.Error
+			if !errors.As(err, &typed) || typed.Code() != test.code || typed.Hint == "" || typed.Docs == "" {
 				t.Fatal("expected a refusal")
 			}
 		})
@@ -139,17 +144,18 @@ func TestCanonicalOrigin(t *testing.T) {
 func TestWidgetTagOmitsUnsetAttributes(t *testing.T) {
 	tag, err := chat.WidgetTagHTML(chat.Widget{
 		BaseURL: "https://app.replypen.com/",
-		Project: "kampadmin",
+		Project: "acme",
 		Token:   "tok",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `<script src="https://app.replypen.com/chat/widget/v1/loader.js?v=2" data-rc-project="kampadmin" data-rc-token="tok"></script>`
+	want := `<script src="https://app.replypen.com/chat/widget/v1/loader.js?v=2" data-rc-project="acme" data-rc-token="tok"></script>`
 	if tag != want {
 		t.Fatalf("tag = %s", tag)
 	}
-	if _, err := chat.WidgetTagHTML(chat.Widget{Project: "p", Token: "t"}); err == nil {
-		t.Fatal("a missing base url must be refused")
+	defaultTag, err := chat.WidgetTagHTML(chat.Widget{Project: "p", Token: "t"})
+	if err != nil || !strings.HasPrefix(defaultTag, `<script src="https://app.replypen.com/`) {
+		t.Fatalf("default base url = %q, %v", defaultTag, err)
 	}
 }

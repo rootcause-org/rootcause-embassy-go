@@ -16,7 +16,11 @@ var schemaTypes = map[string]bool{
 // tenant itself, so these are refused in BOTH params and schema, case-insensitively.
 var reservedTenantParams = map[string]bool{
 	"tenant_id": true, "tenant_slug": true, "tenant_scope_value": true,
-	"rc_tenant_id": true, "rc_tenant_slug": true, "rc_tenant_scope_value": true,
+}
+
+func isReservedTenantParam(name string) bool {
+	canonical := strings.ToLower(name)
+	return reservedTenantParams[canonical] || strings.HasPrefix(canonical, "rc_tenant_")
 }
 
 type paramSpec struct {
@@ -51,12 +55,12 @@ func validateParams(rawParams, rawSchema any) (map[string]any, error) {
 
 	var reserved []string
 	for name := range params {
-		if reservedTenantParams[strings.ToLower(name)] {
+		if isReservedTenantParam(name) {
 			reserved = append(reserved, name)
 		}
 	}
 	for name := range specs {
-		if reservedTenantParams[strings.ToLower(name)] && !contains(reserved, name) {
+		if isReservedTenantParam(name) && !contains(reserved, name) {
 			reserved = append(reserved, name)
 		}
 	}

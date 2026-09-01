@@ -4,11 +4,11 @@ The Go **Embassy**: rootcause's trusted in-app presence inside your own Go servi
 
 It does four things, all on your side of the wire:
 
-1. **Actions** — rootcause sends a signed, **digest-pinned** invocation; you run the approved script
+1. **Chat** — mint the short-lived token that lets a logged-in user chat with rootcause in your UI.
+2. **Actions** — rootcause sends a signed, **digest-pinned** invocation; you run the approved script
    against your own production and answer with a signed structured result.
-2. **Analysis** — your code asks rootcause *"analyze this"* and gets the drafted answer back later on
+3. **Analysis** — your code asks rootcause *"analyze this"* and gets the drafted answer back later on
    a route you mount. No polling, no callback rig of your own.
-3. **Chat** — mint the short-lived token that lets a logged-in user chat with rootcause in your UI.
 4. **API** — call any rootcause API endpoint, bearer auth handled for you.
 
 Dependencies: the Go standard library and [yaegi](https://github.com/traefik/yaegi) (the script
@@ -23,60 +23,86 @@ this package conforms to it and replays its fixtures in CI.
 go get github.com/rootcause-org/rootcause-embassy-go
 ```
 
-## Configure
+## Chat quickstart
 
-One `embassy.New` at boot. It validates **fail-closed** — configure exactly one non-blank `Secret` or
-non-empty `Secrets` project map. A missing fetch URL, placeholder URL, or chat key equal to an action
-key is a boot error, not a first-invocation surprise.
+Start with chat only. `ChatBaseURL` defaults to `https://app.replypen.com`; the long-lived chat secret
+stays in your backend and never reaches the browser.
 
 ```go
 package main
 
 import (
-	"log/slog"
-	"net/http"
+	"os"
+	"time"
 
 	"github.com/rootcause-org/rootcause-embassy-go"
+	"github.com/rootcause-org/rootcause-embassy-go/chat"
 )
 
-func main() {
+func newEmbassy() (*embassy.Embassy, error) {
 	emb, err := embassy.New(embassy.Config{
-		// Every string field falls back to its ROOTCAUSE_* env var when left empty:
-		//   Secret          ROOTCAUSE_ACTION_SECRET      (per-project reverse-channel HMAC key)
-		//   FetchURL        ROOTCAUSE_FETCH_URL          (the host's script-by-digest endpoint)
-		//   TriggerURL      ROOTCAUSE_TRIGGER_URL
-		//   SentMessageURL  ROOTCAUSE_SENT_MESSAGE_URL
-		//   APIBaseURL      ROOTCAUSE_API_BASE_URL
-		//   APIKey          ROOTCAUSE_API_KEY
-		//   ChatSecret      ROOTCAUSE_CHAT_SECRET        (the project's webhook_secret — NOT Secret)
-		//   ChatProject     ROOTCAUSE_CHAT_PROJECT
-		//   ChatBaseURL     ROOTCAUSE_CHAT_BASE_URL
-		// For a shared mount, use Secrets instead of Secret:
-		//   Secrets: map[string]string{"project-uuid": "project-reverse-secret"}
-		Logger:        slog.Default(),
-		ResultHandler: handleAnalysisResult,
-		Symbols: map[string]any{
-			"DB":    db,          // whatever your action scripts need
-			"Mailer": mailer,
-		},
+		ChatSecret:  os.Getenv("ROOTCAUSE_CHAT_SECRET"),
+		ChatProject: os.Getenv("ROOTCAUSE_CHAT_PROJECT"),
 	})
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
+	return emb, nil
+}
 
-	mux := http.NewServeMux()
-	mux.Handle("/rootcause/action", emb.ActionHandler())
-	mux.Handle("/rootcause/action/health", emb.ActionHandler())
-	mux.Handle("/rootcause/result", emb.ResultHandler())
-	http.ListenAndServe(":8080", mux)
+func replypenChatToken(emb *embassy.Embassy, userID, authorizedTenant string) (string, error) {
+	// Inside an authenticated server handler: identity comes from the server
+	// session, never from browser input.
+	return emb.MintChatToken(chat.Claims{
+		ExternalID: userID,
+		Kind:       "your_configured_principal_kind",
+		Origin:     "https://app.example.com",
+		Tenant:     authorizedTenant,
+		TTL:        2 * time.Hour,
+	})
 }
 ```
 
-Both action lines are needed: Go's `ServeMux` matches an exact pattern, and the health child lives one
-segment below the mount. In map mode, host action/result bodies must carry a configured `project_id`;
-missing, malformed, unknown, or sibling-project signatures receive opaque unsigned refusals. Health
-uses the same selector in its signed raw query (`?project_id=<uuid>`). Single-secret mode keeps accepting
-legacy result callbacks and empty-query health probes.
+Mint a fresh token per page render. Re-mint at half-life and when the widget reports `auth-expired`.
+The complete runnable backend + page is [`examples/graphql-chat`](examples/graphql-chat), including
+the GraphQL-shaped `replypenChatToken { token project baseUrl }` response and required CSP.
+
+Errors are typed and safe to branch on:
+
+```go
+var embassyErr *embassy.Error
+if errors.As(err, &embassyErr) {
+	log.Printf("ReplyPen setup failed: %s", embassyErr.Code())
+}
+```
+
+Meaning, self-fix steps, verification, and escalation live in the public
+[integrator guides](https://github.com/rootcause-org/rootcause-embassy/tree/main/docs/integrator).
+
+## Add actions and analysis later
+
+Add `ROOTCAUSE_ACTION_SECRET` plus `ROOTCAUSE_FETCH_URL`; `New` then validates the action plane
+fail-closed. The chat and action secrets are different privilege boundaries and must differ.
+
+```go
+emb, err := embassy.New(embassy.Config{
+	ChatSecret:  os.Getenv("ROOTCAUSE_CHAT_SECRET"),
+	ChatProject: os.Getenv("ROOTCAUSE_CHAT_PROJECT"),
+	Secret:      os.Getenv("ROOTCAUSE_ACTION_SECRET"),
+	FetchURL:    os.Getenv("ROOTCAUSE_FETCH_URL"),
+	ResultHandler: handleAnalysisResult,
+	Symbols: map[string]any{"DB": db, "Mailer": mailer},
+})
+
+mux.Handle("/rootcause/action", emb.ActionHandler())
+mux.Handle("/rootcause/action/health", emb.ActionHandler())
+mux.Handle("/rootcause/result", emb.ResultHandler())
+```
+
+Mounting these routes in a chat-only deployment is safe: they return `ACTION_PLANE_DISABLED` with a
+fix hint and docs link. Both action lines are needed because Go's `ServeMux` matches exact patterns.
+In map mode, use `Secrets` instead of `Secret`; action/result requests select a configured project
+UUID and health signs its raw `?project_id=<uuid>` query.
 
 ## Writing an action script
 
@@ -239,8 +265,9 @@ if !response.OK && response.Retryable {
 }
 ```
 
-Nothing about an HTTP outcome panics or errors — inspect `OK` / `Status` / `FieldErrors` / `Error` /
-`Retryable`. Only a misconfiguration (blank path, off-origin URL) sets `Err`.
+Nothing about an HTTP outcome panics. Inspect `OK` / `Status` / `FieldErrors` / `Error` /
+`Retryable`; failures also set `Err` to a typed `*embassy.Error`. A host `code`, `hint`, and `docs`
+survive token exchange and ordinary API refusals.
 
 An `rcor_` key is exchanged for a short-lived access token and cached in-process; anything else is
 used verbatim as the bearer. Credentials are project-pinned — use `emb.APIFor(baseURL, key)` per
@@ -259,8 +286,9 @@ tag, err := emb.ChatWidgetTagHTML(chat.Claims{
 }, chat.Widget{Mode: "page", Target: "#rc-chat"})
 ```
 
-Render `tag` in your layout. **Mint a fresh token per render** — tokens are short-lived and the `jti`
-is single-use host-side. `chat.MintEmbedToken(secret, claims)` is the standalone form.
+Render `tag` in your layout. `ChatWidgetTagHTML` uses the configured `ChatBaseURL`; the standalone
+`chat.WidgetTagHTML` also defaults its base URL to `https://app.replypen.com`. **Mint a fresh token per
+render** — tokens are short-lived and the `jti` is single-use when opening a session.
 
 ## Multi-worker deployments
 

@@ -30,8 +30,10 @@ func New(cfg Config) (*Embassy, error) {
 		return nil, err
 	}
 	e := &Embassy{cfg: &cfg}
-	e.resolver = newResolver(e.cfg)
-	e.executor = newExecutor(e.cfg)
+	if cfg.actionEnabled() {
+		e.resolver = newResolver(e.cfg)
+		e.executor = newExecutor(e.cfg)
+	}
 	e.api = newAPI(e.cfg, e.cfg.APIBaseURL, e.cfg.APIKey)
 	return e, nil
 }
@@ -39,6 +41,9 @@ func New(cfg Config) (*Embassy, error) {
 // Config returns a copy of the effective configuration (secrets included — never
 // log it).
 func (e *Embassy) Config() Config { return *e.cfg }
+
+// ActionPlaneEnabled reports whether action/analysis secrets were configured.
+func (e *Embassy) ActionPlaneEnabled() bool { return e.cfg.actionEnabled() }
 
 // API is the generic authenticated caller for any rootcause backend endpoint.
 // Bearer auth on a THIRD key, never the HMAC secret.

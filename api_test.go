@@ -3,6 +3,7 @@ package embassy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -159,5 +160,35 @@ func TestAPIMisconfigurationDoesNotHide(t *testing.T) {
 	}
 	if response := emb.API().Get(context.Background(), "", nil); response.Err == nil {
 		t.Fatal("a blank path must surface as a caller bug")
+	}
+}
+
+func TestAPIRefusalPreservesHostCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":"CHAT_DISABLED","hint":"Enable chat for this project.","docs":"https://example.test/chat-disabled"}}`))
+	}))
+	defer server.Close()
+
+	response := apiEmbassy(t, server.URL, "rcoa_static").API().Get(context.Background(), "/api/v1/chat", nil)
+	var typed *Error
+	if !errors.As(response.Err, &typed) || response.Error != "CHAT_DISABLED" || typed.Code() != "CHAT_DISABLED" ||
+		typed.Hint != "Enable chat for this project." || typed.Docs != "https://example.test/chat-disabled" {
+		t.Fatalf("response = %+v err = %#v", response, typed)
+	}
+}
+
+func TestTokenExchangeRefusalPreservesHostCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code":"BAD_TOKEN","hint":"Rotate the API credential.","docs":"https://example.test/bad-token"}`))
+	}))
+	defer server.Close()
+	invalidateToken(server.URL, "rcor_refused")
+
+	response := apiEmbassy(t, server.URL, "rcor_refused").API().Get(context.Background(), "/api/v1/me", nil)
+	var typed *Error
+	if !errors.As(response.Err, &typed) || typed.Code() != "BAD_TOKEN" || typed.Hint != "Rotate the API credential." {
+		t.Fatalf("response = %+v err = %#v", response, typed)
 	}
 }

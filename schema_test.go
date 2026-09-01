@@ -87,6 +87,12 @@ func TestValidateParams(t *testing.T) {
 			wantErr: "reserved param(s): RC_Tenant_Slug",
 		},
 		{
+			name:    "every rc tenant prefix spelling is reserved",
+			params:  `{"rc_tenant_custom":"sneaky"}`,
+			schema:  `{"rc_tenant_custom":{"type":"string"}}`,
+			wantErr: "reserved param(s): rc_tenant_custom",
+		},
+		{
 			name:    "a missing schema fails closed",
 			params:  `{"email":"x"}`,
 			schema:  ``,
@@ -108,7 +114,7 @@ func TestValidateParams(t *testing.T) {
 			switch {
 			case test.wantErr == "" && err != nil:
 				t.Fatalf("unexpected error: %v", err)
-			case test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)):
+			case test.wantErr != "" && (err == nil || !strings.Contains(err.(*Error).Message, test.wantErr)):
 				t.Fatalf("error = %v, want %q", err, test.wantErr)
 			case test.wantErr != "":
 				refusal := err.(*Error)

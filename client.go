@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -145,10 +144,10 @@ type proposedBody struct {
 // anything is sent.
 func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (Analysis, error) {
 	if e.cfg.TriggerURL == "" {
-		return Analysis{}, fmt.Errorf("embassy: TriggerURL is not configured (ROOTCAUSE_TRIGGER_URL)")
+		return Analysis{}, publicError("ANALYSIS_TRIGGER_URL_REQUIRED", "Set ROOTCAUSE_TRIGGER_URL before starting an analysis.")
 	}
 	if request.Body == "" {
-		return Analysis{}, fmt.Errorf("embassy: analysis body is required")
+		return Analysis{}, publicError("ANALYSIS_BODY_REQUIRED", "Set AnalysisRequest.Body to the text ReplyPen should analyze.")
 	}
 	secret, err := e.cfg.outboundSecret(request.ProjectID)
 	if err != nil {
@@ -159,7 +158,7 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 	}
 	if request.Principal != nil {
 		if request.Principal.Kind == "" || request.Principal.ExternalID == "" {
-			return Analysis{}, fmt.Errorf("embassy: principal requires both Kind and ExternalID")
+			return Analysis{}, publicError("PRINCIPAL_REQUIRED", "Set both Principal.Kind and Principal.ExternalID from the signed-in server session.")
 		}
 	}
 
@@ -184,7 +183,7 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 		Tenant:      request.Tenant,
 	})
 	if err != nil {
-		return Analysis{}, fmt.Errorf("embassy: analysis trigger could not be encoded: %w", err)
+		return Analysis{}, causedError("ANALYSIS_REQUEST_INVALID", "Use JSON-compatible values in the analysis request.", err)
 	}
 
 	body, err := e.postSigned(ctx, e.cfg.TriggerURL, raw, "analysis trigger", secret)
@@ -193,7 +192,7 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 	}
 	var analysis Analysis
 	if err := json.Unmarshal(body, &analysis); err != nil || analysis.AnalysisID == "" {
-		return Analysis{}, fmt.Errorf("embassy: analysis trigger response missing analysis_id")
+		return Analysis{}, causedError("ANALYSIS_RESPONSE_INVALID", "The analysis response omitted analysis_id; capture the status and escalate.", err)
 	}
 	e.logger().Info("rootcause analysis triggered",
 		"analysis_id", analysis.AnalysisID,
@@ -209,17 +208,17 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 // the updated result back over the result route.
 func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageRequest) (SentMessage, error) {
 	if e.cfg.SentMessageURL == "" {
-		return SentMessage{}, fmt.Errorf("embassy: SentMessageURL is not configured (ROOTCAUSE_SENT_MESSAGE_URL)")
+		return SentMessage{}, publicError("SENT_MESSAGE_URL_REQUIRED", "Set ROOTCAUSE_SENT_MESSAGE_URL before capturing a sent message.")
 	}
 	if request.SessionID == "" {
-		return SentMessage{}, fmt.Errorf("embassy: SessionID is required")
+		return SentMessage{}, publicError("SESSION_ID_REQUIRED", "Set SentMessageRequest.SessionID to the ReplyPen session being continued.")
 	}
 	secret, err := e.cfg.outboundSecret(request.ProjectID)
 	if err != nil {
 		return SentMessage{}, err
 	}
 	if request.SentBody == "" && len(request.Answers) == 0 {
-		return SentMessage{}, fmt.Errorf("embassy: SentBody or Answers is required")
+		return SentMessage{}, publicError("SENT_MESSAGE_CONTENT_REQUIRED", "Set SentBody, Answers, or both before capturing a sent message.")
 	}
 
 	payload := sentMessagePayload{
@@ -239,7 +238,7 @@ func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageReq
 
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return SentMessage{}, fmt.Errorf("embassy: sent-message could not be encoded: %w", err)
+		return SentMessage{}, causedError("SENT_MESSAGE_INVALID", "Use JSON-compatible values in the sent-message request.", err)
 	}
 
 	body, err := e.postSigned(ctx, e.cfg.SentMessageURL, raw, "sent-message capture", secret)
@@ -249,7 +248,7 @@ func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageReq
 	var result SentMessage
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &result); err != nil {
-			return SentMessage{}, fmt.Errorf("embassy: sent-message capture response was not valid JSON")
+			return SentMessage{}, causedError("SENT_MESSAGE_RESPONSE_INVALID", "The sent-message response was invalid JSON; capture the status and escalate.", err)
 		}
 	}
 	// Byte counts, never bodies; metadata KEYS, never values.
@@ -267,23 +266,23 @@ func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageReq
 func (e *Embassy) postSigned(ctx context.Context, url string, raw []byte, label, secret string) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
-		return nil, fmt.Errorf("embassy: %s request could not be built: %w", label, err)
+		return nil, causedError("API_REQUEST_INVALID", "Check the configured endpoint URL and request fields.", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(SignatureHeader, Sign(raw, secret))
 
 	response, err := e.cfg.HTTPClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("embassy: %s failed: %w", label, err)
+		return nil, causedError("API_TRANSPORT_ERROR", "The ReplyPen endpoint could not be reached; check connectivity and retry.", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("embassy: %s response could not be read", label)
+		return nil, causedError("API_RESPONSE_INVALID", "The ReplyPen response could not be read; retry and escalate if it persists.", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, fmt.Errorf("embassy: %s returned %d", label, response.StatusCode)
+		return nil, hostRefusal(parseAPIBody(body), response.StatusCode)
 	}
 	return body, nil
 }
@@ -292,19 +291,19 @@ func (e *Embassy) postSigned(ctx context.Context, url string, raw []byte, label,
 // strict decode also proves the base64 is well-formed.
 func (e *Embassy) checkAttachments(attachments []Attachment) error {
 	total := 0
-	for i, attachment := range attachments {
+	for _, attachment := range attachments {
 		decoded, err := base64.StdEncoding.DecodeString(attachment.ContentBase64)
 		if err != nil {
-			return fmt.Errorf("embassy: attachment %d: content_base64 is not valid base64", i)
+			return publicError("ATTACHMENT_INVALID", "Encode every attachment's ContentBase64 with standard base64 before sending.")
 		}
 		if len(decoded) > e.cfg.MaxAttachmentBytes {
-			return fmt.Errorf("embassy: attachment %d: %d decoded bytes exceeds MaxAttachmentBytes (%d)", i, len(decoded), e.cfg.MaxAttachmentBytes)
+			return publicError("ATTACHMENT_TOO_LARGE", "Reduce each decoded attachment below Config.MaxAttachmentBytes.")
 		}
 		total += len(decoded)
 		// The host's aggregate ceiling: without this a set of individually legal
 		// attachments uploads in full and is rejected on arrival.
 		if total > maxTotalAttachmentBytes {
-			return fmt.Errorf("embassy: attachments total %d decoded bytes exceeds the host's %d cap", total, maxTotalAttachmentBytes)
+			return publicError("ATTACHMENTS_TOO_LARGE", "Reduce the combined decoded attachments below the ReplyPen request limit.")
 		}
 	}
 	return nil

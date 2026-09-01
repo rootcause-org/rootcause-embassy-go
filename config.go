@@ -1,7 +1,6 @@
 package embassy
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -25,6 +24,9 @@ const RuntimeToken = "go"
 // placeholderFetchURL is the inert default: reaching a script fetch with it means
 // ROOTCAUSE_FETCH_URL was never set. Caught at boot, not on the first invocation.
 const placeholderFetchURL = "https://rootcause.invalid/actions/script"
+
+// DefaultChatBaseURL is the public ReplyPen application origin.
+const DefaultChatBaseURL = "https://app.replypen.com"
 
 // Config is set once at boot and treated as immutable afterwards. Every string
 // field falls back to its ROOTCAUSE_* environment variable when left empty.
@@ -141,6 +143,9 @@ func (c *Config) applyDefaults() {
 	if c.FetchURL == "" {
 		c.FetchURL = placeholderFetchURL
 	}
+	if c.ChatBaseURL == "" {
+		c.ChatBaseURL = DefaultChatBaseURL
+	}
 	if c.Timeout == 0 {
 		c.Timeout = 20 * time.Second
 	}
@@ -173,23 +178,10 @@ func (c *Config) applyDefaults() {
 // validate fails closed at BOOT rather than on the first invocation: every check
 // here catches a deployment mistake, not a runtime condition.
 func (c *Config) validate() error {
-	if err := c.validateSecrets(); err != nil {
-		return err
-	}
-	if c.Secret == "" && len(c.Secrets) == 0 {
-		return fmt.Errorf("embassy: Secret is required (ROOTCAUSE_ACTION_SECRET) — HMAC with a blank key is trivially forgeable")
-	}
-	if isPlaceholderFetchURL(c.FetchURL) {
-		return fmt.Errorf("embassy: FetchURL is the placeholder (%s) — set ROOTCAUSE_FETCH_URL to the host's script endpoint", c.FetchURL)
-	}
-	if c.Timeout <= 0 {
-		return fmt.Errorf("embassy: Timeout must be positive")
-	}
-	if c.TotalDeadline <= c.Timeout {
-		return fmt.Errorf("embassy: TotalDeadline (%s) must exceed Timeout (%s) — the execute backstop has to fire inside the invocation budget, not after it", c.TotalDeadline, c.Timeout)
-	}
-	if c.ClockSkew <= 0 {
-		return fmt.Errorf("embassy: ClockSkew must be positive")
+	if c.actionPlaneRequested() {
+		if err := c.validateAction(); err != nil {
+			return err
+		}
 	}
 	if err := c.validateAPI(); err != nil {
 		return err
@@ -197,28 +189,56 @@ func (c *Config) validate() error {
 	return c.validateChat()
 }
 
+func (c *Config) validateAction() error {
+	if err := c.validateSecrets(); err != nil {
+		return err
+	}
+	if isPlaceholderFetchURL(c.FetchURL) {
+		return publicError("ACTION_FETCH_URL_REQUIRED", "Set ROOTCAUSE_FETCH_URL to the absolute ReplyPen script endpoint before enabling actions.")
+	}
+	if c.Timeout <= 0 {
+		return publicError("ACTION_TIMEOUT_INVALID", "Set Timeout to a positive duration shorter than TotalDeadline.")
+	}
+	if c.TotalDeadline <= c.Timeout {
+		return publicError("ACTION_DEADLINE_INVALID", "Set TotalDeadline greater than Timeout so the Embassy can refuse before the host cutoff.")
+	}
+	if c.ClockSkew <= 0 {
+		return publicError("ACTION_CLOCK_SKEW_INVALID", "Set ClockSkew to a positive duration.")
+	}
+	return nil
+}
+
+func (c *Config) actionPlaneRequested() bool {
+	return c.actionEnabled() || c.FetchURL != placeholderFetchURL || c.TriggerURL != "" ||
+		c.SentMessageURL != "" || c.ResultHandler != nil || c.RequireTenantContext || c.CacheDir != "" || len(c.Symbols) > 0
+}
+
+func (c *Config) actionEnabled() bool {
+	return strings.TrimSpace(c.Secret) != "" || len(c.Secrets) > 0
+}
+
 func (c *Config) validateSecrets() error {
 	hasSecret := strings.TrimSpace(c.Secret) != ""
 	hasMap := len(c.Secrets) > 0
 	if hasSecret == hasMap {
 		if hasSecret {
-			return fmt.Errorf("embassy: configure exactly one of Secret or Secrets, not both")
+			return publicError("ACTION_SECRETS_INVALID", "Configure exactly one of Secret or Secrets, never both.")
 		}
-		return fmt.Errorf("embassy: Secret is required (ROOTCAUSE_ACTION_SECRET) — HMAC with a blank key is trivially forgeable")
+		return publicError("ACTION_SECRET_REQUIRED", "Set ROOTCAUSE_ACTION_SECRET, or Config.Secrets, before enabling the action or analysis plane.")
 	}
 	if hasMap {
 		seen := make(map[string]struct{}, len(c.Secrets))
 		for projectID, secret := range c.Secrets {
 			if !validProjectID(projectID) {
-				return fmt.Errorf("embassy: Secrets key %q must be a project UUID", projectID)
+				return publicError("ACTION_SECRETS_INVALID", "Every Config.Secrets key must be a non-nil project UUID.")
 			}
 			canonical := strings.ToLower(projectID)
 			if _, exists := seen[canonical]; exists {
-				return fmt.Errorf("embassy: Secrets contains duplicate project UUID %q", projectID)
+				return publicError("ACTION_SECRETS_INVALID", "Config.Secrets must not contain duplicate project UUIDs with different casing.")
 			}
 			seen[canonical] = struct{}{}
 			if strings.TrimSpace(secret) == "" {
-				return fmt.Errorf("embassy: Secrets[%q] must be non-blank", projectID)
+				return publicError("ACTION_SECRETS_INVALID", "Every Config.Secrets value must be a non-blank action reverse secret.")
 			}
 		}
 	}
@@ -250,12 +270,15 @@ func (c *Config) secretForProject(projectID string) (string, bool) {
 }
 
 func (c *Config) outboundSecret(projectID string) (string, error) {
+	if !c.actionEnabled() {
+		return "", publicError("ACTION_PLANE_DISABLED", "Configure ROOTCAUSE_ACTION_SECRET and ROOTCAUSE_FETCH_URL before using actions or analysis.")
+	}
 	if len(c.Secrets) == 0 {
 		return c.Secret, nil
 	}
 	secret, ok := c.secretForProject(projectID)
 	if !ok {
-		return "", fmt.Errorf("embassy: ProjectID must identify a configured project UUID in Secrets")
+		return "", publicError("ACTION_PROJECT_UNKNOWN", "Set ProjectID to a project UUID present in Config.Secrets.")
 	}
 	return secret, nil
 }
@@ -267,39 +290,39 @@ func (c *Config) validateAPI() error {
 		return nil
 	}
 	if c.APIBaseURL == "" {
-		return fmt.Errorf("embassy: APIBaseURL is required when APIKey is set")
+		return publicError("API_BASE_URL_REQUIRED", "Set ROOTCAUSE_API_BASE_URL when ROOTCAUSE_API_KEY is configured.")
 	}
 	if c.APIKey == "" {
-		return fmt.Errorf("embassy: APIKey is required when APIBaseURL is set")
+		return publicError("API_KEY_REQUIRED", "Set ROOTCAUSE_API_KEY when ROOTCAUSE_API_BASE_URL is configured.")
 	}
 	if !isAbsoluteHTTPURL(c.APIBaseURL) {
-		return fmt.Errorf("embassy: APIBaseURL must be an absolute http(s) URL")
+		return publicError("API_BASE_URL_INVALID", "Set ROOTCAUSE_API_BASE_URL to an absolute http or https URL.")
 	}
 	return nil
 }
 
 func (c *Config) validateChat() error {
-	if c.ChatSecret == "" && c.ChatProject == "" && c.ChatBaseURL == "" {
+	if !isAbsoluteHTTPURL(c.ChatBaseURL) {
+		return publicError("CHAT_BASE_URL_INVALID", "Set ROOTCAUSE_CHAT_BASE_URL to an absolute http or https URL.")
+	}
+	if c.ChatSecret == "" && c.ChatProject == "" {
 		return nil
 	}
 	if c.ChatSecret == "" {
-		return fmt.Errorf("embassy: ChatSecret is required when chat is configured")
+		return publicError("CHAT_SECRET_REQUIRED", "Set ROOTCAUSE_CHAT_SECRET to the project's chat signing secret.")
 	}
 	if c.ChatProject == "" {
-		return fmt.Errorf("embassy: ChatProject is required when chat is configured")
+		return publicError("CHAT_PROJECT_REQUIRED", "Set ROOTCAUSE_CHAT_PROJECT to the public ReplyPen project slug.")
 	}
 	// Two different privilege boundaries. The same value in both means one of the
 	// two env vars points at the wrong secret.
 	if c.ChatSecret == c.Secret {
-		return fmt.Errorf("embassy: ChatSecret must differ from Secret — ROOTCAUSE_CHAT_SECRET is the project's webhook_secret, not the action reverse-channel secret")
+		return publicError("CHAT_SECRET_REUSED", "Use different values for ROOTCAUSE_CHAT_SECRET and ROOTCAUSE_ACTION_SECRET.")
 	}
 	for _, secret := range c.Secrets {
 		if c.ChatSecret == secret {
-			return fmt.Errorf("embassy: ChatSecret must differ from Secrets values — ROOTCAUSE_CHAT_SECRET is the project's webhook_secret, not the action reverse-channel secret")
+			return publicError("CHAT_SECRET_REUSED", "Use a chat signing secret that differs from every action reverse secret.")
 		}
-	}
-	if c.ChatBaseURL != "" && !isAbsoluteHTTPURL(c.ChatBaseURL) {
-		return fmt.Errorf("embassy: ChatBaseURL must be an absolute http(s) URL")
 	}
 	return nil
 }

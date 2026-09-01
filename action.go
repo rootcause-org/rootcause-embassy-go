@@ -18,6 +18,9 @@ const maxInvocationBytes = 8 << 20
 type wireError struct {
 	Class   string `json:"class"`
 	Message string `json:"message"`
+	Code    string `json:"code,omitempty"`
+	Hint    string `json:"hint,omitempty"`
+	Docs    string `json:"docs,omitempty"`
 }
 
 // resultEnvelope is the action plane's success/failure shape. Field order matches
@@ -52,6 +55,10 @@ type healthEnvelope struct {
 //	mux.Handle("/rootcause/action/health", emb.ActionHandler())
 func (e *Embassy) ActionHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !e.cfg.actionEnabled() {
+			writeActionPlaneDisabled(w)
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/health") {
 			e.serveHealth(w, r)
 			return
@@ -105,24 +112,25 @@ func (e *Embassy) serveInvocation(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxInvocationBytes))
 	if err != nil {
+		refusal := invalidRequest("request body could not be read")
 		secret, selected := e.inboundSecret(nil)
 		if selected {
-			e.writeSigned(w, 400, refusalEnvelope{Error: wireError{Class: ClassInvalidRequest, Message: "request body could not be read"}}, secret)
+			e.writeSigned(w, 400, refusalEnvelope{Error: wireRefusal(refusal)}, secret)
 		} else {
-			e.writeUnsigned(w, http.StatusUnauthorized, refusalEnvelope{Error: wireError{Class: ClassBadSignature, Message: "signature missing or invalid"}})
+			e.writeUnsigned(w, http.StatusUnauthorized, refusalEnvelope{Error: wireRefusal(badSignature("signature missing or invalid"))})
 		}
 		return
 	}
 
 	secret, selected := e.inboundSecret(raw)
 	if !selected {
-		e.writeUnsigned(w, http.StatusUnauthorized, refusalEnvelope{Error: wireError{Class: ClassBadSignature, Message: "signature missing or invalid"}})
+		e.writeUnsigned(w, http.StatusUnauthorized, refusalEnvelope{Error: wireRefusal(badSignature("signature missing or invalid"))})
 		return
 	}
 	envelope, refusal := e.invoke(ctx, raw, r.Header.Get(SignatureHeader), started, secret)
 	if refusal != nil {
 		e.logRefusal(refusal, raw)
-		e.writeSigned(w, refusal.Status, refusalEnvelope{Error: wireError{Class: refusal.Class, Message: refusal.Message}}, secret)
+		e.writeSigned(w, refusal.Status, refusalEnvelope{Error: wireRefusal(refusal)}, secret)
 		return
 	}
 	e.writeSigned(w, http.StatusOK, envelope, secret)
@@ -212,9 +220,9 @@ func (e *Embassy) invoke(ctx context.Context, raw []byte, signature string, star
 		// The whole invocation ran out of budget, not just the body: report it with
 		// the same vocabulary so the host sees one failure story.
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			envelope.Error = &wireError{Class: "timeout", Message: "invocation exceeded its total deadline"}
+			envelope.Error = executionWireError("timeout", "invocation exceeded its total deadline")
 		} else {
-			envelope.Error = &wireError{Class: outcome.errClass, Message: outcome.errMessage}
+			envelope.Error = executionWireError(outcome.errClass, outcome.errMessage)
 		}
 	}
 	e.logInvocation(invocation, envelope)
@@ -282,7 +290,25 @@ func writeMethodNotAllowed(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Allow", "POST")
 	w.WriteHeader(http.StatusMethodNotAllowed)
-	_, _ = w.Write([]byte(`{"ok":false,"error":{"class":"` + classMethodNotAllowed + `","message":"POST required"}}`))
+	_, _ = w.Write([]byte(`{"ok":false,"error":{"class":"` + classMethodNotAllowed + `","message":"POST required","code":"METHOD_NOT_ALLOWED","hint":"Send a POST request to the action mount, or a GET request to its health child.","docs":"` + docsURL("METHOD_NOT_ALLOWED") + `"}}`))
+}
+
+func writeActionPlaneDisabled(w http.ResponseWriter) {
+	err := publicError("ACTION_PLANE_DISABLED", "Configure ROOTCAUSE_ACTION_SECRET and ROOTCAUSE_FETCH_URL before mounting action routes.")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(refusalEnvelope{Error: wireError{
+		Class: classActionPlaneDisabled, Message: err.Hint, Code: err.Code(), Hint: err.Hint, Docs: err.Docs,
+	}})
+}
+
+func wireRefusal(err *Error) wireError {
+	return wireError{Class: err.Class, Message: err.Message, Code: err.Code(), Hint: err.Hint, Docs: err.Docs}
+}
+
+func executionWireError(class, message string) *wireError {
+	err := publicError("ACTION_EXECUTION_FAILED", "Inspect the action outcome and application logs before deciding whether a retry is safe.")
+	return &wireError{Class: class, Message: message, Code: err.Code(), Hint: err.Hint, Docs: err.Docs}
 }
 
 // writeSigned marshals once, signs those exact bytes, and writes those exact
@@ -291,7 +317,7 @@ func writeMethodNotAllowed(w http.ResponseWriter) {
 func (e *Embassy) writeSigned(w http.ResponseWriter, status int, payload any, secret string) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		body = []byte(`{"ok":false,"error":{"class":"` + ClassInternalError + `","message":"` + typeName(err) + `"}}`)
+		body, _ = json.Marshal(refusalEnvelope{Error: wireRefusal(actionError(500, ClassInternalError, typeName(err)))})
 		status = http.StatusInternalServerError
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -314,7 +340,7 @@ func asError(err error) *Error {
 	if errors.As(err, &refusal) {
 		return refusal
 	}
-	return &Error{Status: 500, Class: ClassInternalError, Message: typeName(err)}
+	return actionError(500, ClassInternalError, typeName(err))
 }
 
 func millisSince(started time.Time) int64 {

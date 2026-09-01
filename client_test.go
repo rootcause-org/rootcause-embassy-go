@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -85,42 +85,43 @@ func TestStartAnalysisValidatesBeforeSending(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		request AnalysisRequest
-		wantErr string
+		name     string
+		request  AnalysisRequest
+		wantCode string
 	}{
 		{
-			name:    "body is required",
-			request: AnalysisRequest{Subject: "hi"},
-			wantErr: "body is required",
+			name:     "body is required",
+			request:  AnalysisRequest{Subject: "hi"},
+			wantCode: "ANALYSIS_BODY_REQUIRED",
 		},
 		{
-			name:    "a partial principal under-scopes",
-			request: AnalysisRequest{Body: "x", Principal: &Principal{Kind: "admin"}},
-			wantErr: "Kind and ExternalID",
+			name:     "a partial principal under-scopes",
+			request:  AnalysisRequest{Body: "x", Principal: &Principal{Kind: "admin"}},
+			wantCode: "PRINCIPAL_REQUIRED",
 		},
 		{
-			name:    "malformed base64",
-			request: AnalysisRequest{Body: "x", Attachments: []Attachment{{ContentBase64: "!!!"}}},
-			wantErr: "not valid base64",
+			name:     "malformed base64",
+			request:  AnalysisRequest{Body: "x", Attachments: []Attachment{{ContentBase64: "!!!"}}},
+			wantCode: "ATTACHMENT_INVALID",
 		},
 		{
-			name:    "per-attachment cap",
-			request: AnalysisRequest{Body: "x", Attachments: []Attachment{{ContentBase64: oversized}}},
-			wantErr: "MaxAttachmentBytes",
+			name:     "per-attachment cap",
+			request:  AnalysisRequest{Body: "x", Attachments: []Attachment{{ContentBase64: oversized}}},
+			wantCode: "ATTACHMENT_TOO_LARGE",
 		},
 		{
-			name:    "aggregate cap",
-			request: AnalysisRequest{Body: "x", Attachments: many},
-			wantErr: "exceeds the host's",
+			name:     "aggregate cap",
+			request:  AnalysisRequest{Body: "x", Attachments: many},
+			wantCode: "ATTACHMENTS_TOO_LARGE",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := emb.StartAnalysis(context.Background(), test.request)
-			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("error = %v, want %q", err, test.wantErr)
+			var typed *Error
+			if !errors.As(err, &typed) || typed.Code() != test.wantCode {
+				t.Fatalf("error = %v, want code %q", err, test.wantCode)
 			}
 		})
 	}

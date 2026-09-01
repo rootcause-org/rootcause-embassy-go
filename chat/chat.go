@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -27,6 +28,12 @@ import (
 // DefaultTTL is the token lifetime the host is tuned for. The jti is single-use
 // anyway, so this only bounds the UNOPENED window.
 const DefaultTTL = 7200 * time.Second
+
+// MaxTTL prevents a leaked, unopened token from remaining useful indefinitely.
+const MaxTTL = 24 * time.Hour
+
+// DefaultBaseURL is the hosted ReplyPen widget origin.
+const DefaultBaseURL = "https://app.replypen.com"
 
 // DefaultAssurance means "asserted by the customer's own authenticated server
 // session".
@@ -49,7 +56,7 @@ type Claims struct {
 	// ExternalID is the opaque, stable user id rootcause anchors a conversation to
 	// — never a name or an email.
 	ExternalID string
-	// Kind names the identity namespace ExternalID lives in, e.g. "kampadmin_admin".
+	// Kind names the identity namespace ExternalID lives in, e.g. "acme_user".
 	Kind string
 	// Origin is the browser Origin the token is pinned to. The host compares it
 	// byte-for-byte with the request's Origin header.
@@ -100,17 +107,17 @@ type tokenPrincipal struct {
 // "no tenant" and an explicit null would be indistinguishable.
 func MintEmbedToken(secret string, claims Claims) (string, error) {
 	// A blank key fails closed: HMAC with a zero-length key is trivially forgeable.
-	if secret == "" {
-		return "", fmt.Errorf("chat: secret is required (ROOTCAUSE_CHAT_SECRET)")
+	if strings.TrimSpace(secret) == "" {
+		return "", refusal("CHAT_SECRET_REQUIRED", "Set ROOTCAUSE_CHAT_SECRET to the project's chat signing secret.")
 	}
-	if claims.Project == "" {
-		return "", fmt.Errorf("chat: Project is required")
+	if strings.TrimSpace(claims.Project) == "" {
+		return "", refusal("CHAT_PROJECT_REQUIRED", "Set Claims.Project, or Config.ChatProject, to the public ReplyPen project slug.")
 	}
-	if claims.ExternalID == "" {
-		return "", fmt.Errorf("chat: ExternalID is required")
+	if strings.TrimSpace(claims.ExternalID) == "" {
+		return "", refusal("CHAT_EXTERNAL_ID_REQUIRED", "Set Claims.ExternalID from the signed-in server session's stable user identifier.")
 	}
-	if claims.Kind == "" {
-		return "", fmt.Errorf("chat: Kind is required")
+	if strings.TrimSpace(claims.Kind) == "" {
+		return "", refusal("PRINCIPAL_REQUIRED", "Set Claims.Kind to the principal kind configured for this ReplyPen project.")
 	}
 	origin, err := CanonicalOrigin(claims.Origin)
 	if err != nil {
@@ -120,8 +127,8 @@ func MintEmbedToken(secret string, claims Claims) (string, error) {
 	if ttl == 0 {
 		ttl = DefaultTTL
 	}
-	if ttl <= 0 {
-		return "", fmt.Errorf("chat: TTL must be positive")
+	if ttl < time.Second || ttl > MaxTTL {
+		return "", refusal("TOKEN_TTL_INVALID", "Set Claims.TTL between 1 second and 24 hours; 2 hours is the recommended default.")
 	}
 	issuedAt := claims.IssuedAt
 	if issuedAt.IsZero() {
@@ -162,7 +169,7 @@ func MintEmbedToken(secret string, claims Claims) (string, error) {
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("chat: claims could not be encoded: %w", err)
+		return "", &Error{ErrorCode: "TOKEN_MINT_FAILED", Hint: "Use JSON-compatible UTF-8 claim values and retry minting.", Docs: docsBaseURL + "token_mint_failed", Cause: err}
 	}
 
 	// The header is exactly this, always. `alg` is checked BEFORE the signature
@@ -199,17 +206,21 @@ type Widget struct {
 // never cached across renders.
 func WidgetTagHTML(w Widget) (string, error) {
 	if w.BaseURL == "" {
-		return "", fmt.Errorf("chat: BaseURL is required (ROOTCAUSE_CHAT_BASE_URL)")
+		w.BaseURL = DefaultBaseURL
 	}
-	if w.Project == "" {
-		return "", fmt.Errorf("chat: Project is required")
+	baseURL, err := CanonicalOrigin(w.BaseURL)
+	if err != nil {
+		return "", refusal("CHAT_BASE_URL_INVALID", "Set Widget.BaseURL to an absolute http or https origin with no path.")
 	}
-	if w.Token == "" {
-		return "", fmt.Errorf("chat: Token is required")
+	if strings.TrimSpace(w.Project) == "" {
+		return "", refusal("CHAT_PROJECT_REQUIRED", "Set Widget.Project to the public ReplyPen project slug.")
+	}
+	if strings.TrimSpace(w.Token) == "" {
+		return "", refusal("NO_TOKEN", "Mint a fresh embed token for this page render and pass it as Widget.Token.")
 	}
 
 	attributes := [][2]string{
-		{"src", strings.TrimSuffix(w.BaseURL, "/") + loaderPath + "?v=" + loaderRevision},
+		{"src", baseURL + loaderPath + "?v=" + loaderRevision},
 		{"data-rc-project", w.Project},
 		{"data-rc-token", w.Token},
 	}
@@ -239,16 +250,16 @@ func WidgetTagHTML(w Widget) (string, error) {
 // byte, so a near-miss would read as a forged token far from its cause.
 func CanonicalOrigin(raw string) (string, error) {
 	if raw == "" {
-		return "", fmt.Errorf("chat: Origin is required")
+		return "", refusal("ORIGIN_INVALID", "Set Claims.Origin to the browser origin as scheme://host[:port].")
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("chat: Origin is not a valid URL: %q", raw)
+		return "", refusal("ORIGIN_INVALID", "Set Claims.Origin to a valid http or https origin as scheme://host[:port].")
 	}
 	if (parsed.Scheme != "http" && parsed.Scheme != "https") ||
-		parsed.Hostname() == "" || parsed.RawQuery != "" || parsed.Fragment != "" ||
+		parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
 		(parsed.Path != "" && parsed.Path != "/") {
-		return "", fmt.Errorf("chat: Origin must be scheme://host[:port] with no path, got %q", raw)
+		return "", refusal("ORIGIN_INVALID", "Set Claims.Origin to scheme://host[:port] with no path, query, fragment, or user information.")
 	}
 
 	host := strings.ToLower(parsed.Hostname())
@@ -257,7 +268,9 @@ func CanonicalOrigin(raw string) (string, error) {
 		port = ""
 	}
 	if port != "" {
-		host += ":" + port
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
 	}
 	return parsed.Scheme + "://" + host, nil
 }

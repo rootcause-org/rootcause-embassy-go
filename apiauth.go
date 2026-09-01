@@ -3,7 +3,6 @@ package embassy
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -105,29 +104,29 @@ func exchangeRefreshToken(ctx context.Context, cfg *Config, baseURL, refreshToke
 	endpoint := strings.TrimSuffix(baseURL, "/") + "/oauth/token"
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", 0, fmt.Errorf("token exchange request could not be built")
+		return "", 0, causedError("TOKEN_EXCHANGE_FAILED", "Check ROOTCAUSE_API_BASE_URL and retry the token exchange.", err)
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	response, err := cfg.HTTPClient.Do(request)
 	if err != nil {
-		return "", 0, fmt.Errorf("token exchange transport error")
+		return "", 0, causedError("API_TRANSPORT_ERROR", "The OAuth token endpoint could not be reached; check connectivity and retry.", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return "", 0, fmt.Errorf("token exchange response could not be read")
+		return "", 0, causedError("TOKEN_EXCHANGE_FAILED", "The OAuth token response could not be read; retry the request.", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return "", 0, fmt.Errorf("token exchange failed: http_%d", response.StatusCode)
+		return "", 0, hostRefusal(parseAPIBody(raw), response.StatusCode)
 	}
 	var payload tokenResponse
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", 0, fmt.Errorf("token exchange response was not valid JSON")
+		return "", 0, causedError("TOKEN_EXCHANGE_FAILED", "The OAuth token endpoint returned invalid JSON; capture the status and escalate.", err)
 	}
 	if payload.AccessToken == "" {
-		return "", 0, fmt.Errorf("token exchange response missing access_token")
+		return "", 0, publicError("TOKEN_EXCHANGE_FAILED", "The OAuth token response omitted access_token; capture the response status and escalate.")
 	}
 	expiresIn := defaultExpiresIn
 	if payload.ExpiresIn > 0 {
