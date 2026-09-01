@@ -3,6 +3,7 @@ package embassy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -104,8 +105,9 @@ func TestResolverVerifiesDigestAndSignature(t *testing.T) {
 	t.Run("an unsigned fetch response is a hard refuse", func(t *testing.T) {
 		server := scriptHost(t, script, false)
 		r := newResolver(testConfig(t, server.URL))
-		if _, err := r.resolve(context.Background(), "a", digest, "p"); err == nil ||
-			!strings.Contains(err.(*Error).Message, "signature invalid") {
+		var refusal *Error
+		if _, err := r.resolve(context.Background(), "a", digest, "p"); !errors.As(err, &refusal) ||
+			!strings.Contains(refusal.Message, "signature invalid") {
 			t.Fatalf("err = %v", err)
 		}
 	})

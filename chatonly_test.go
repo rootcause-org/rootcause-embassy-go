@@ -1,6 +1,7 @@
 package embassy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -50,6 +51,26 @@ func TestEmbassyChatFacadeReturnsEmbassyError(t *testing.T) {
 	_, err = emb.MintChatToken(chat.Claims{ExternalID: "user-1", Origin: "https://app.acme.example"})
 	var typed *Error
 	if !errors.As(err, &typed) || typed.Code() != "PRINCIPAL_REQUIRED" || typed.Hint == "" || typed.Docs == "" {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
+func TestChatOnlyOutboundPlanesRefuseFailClosed(t *testing.T) {
+	if _, err := New(Config{ChatSecret: "chat-secret", ChatProject: "acme", TriggerURL: "https://app.replypen.com/trigger"}); err == nil {
+		t.Fatal("a trigger url without an action secret must not boot")
+	}
+
+	emb, err := New(Config{ChatSecret: "chat-secret", ChatProject: "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = emb.StartAnalysis(context.Background(), AnalysisRequest{Body: "why?"})
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Code() != "ANALYSIS_TRIGGER_URL_REQUIRED" {
+		t.Fatalf("error = %#v", err)
+	}
+	_, err = emb.CaptureSentMessage(context.Background(), SentMessageRequest{SessionID: "s"})
+	if !errors.As(err, &typed) || typed.Code() != "SENT_MESSAGE_URL_REQUIRED" {
 		t.Fatalf("error = %#v", err)
 	}
 }

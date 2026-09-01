@@ -1,6 +1,9 @@
 package embassy
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 const docsBaseURL = "https://github.com/rootcause-org/rootcause-embassy/blob/main/docs/integrator/errors.md#"
 
@@ -16,8 +19,15 @@ type Error struct {
 	Cause     error
 }
 
+// The stable prefix is the CODE; the wire `message` detail is appended when it
+// adds something the canned hint does not, so a log line still names the field
+// or value that was refused.
 func (e *Error) Error() string {
-	return e.Code() + ": " + e.Hint + " — " + e.Docs
+	text := e.Code() + ": " + e.Hint
+	if e.Message != "" && e.Message != e.Hint {
+		text += " (" + e.Message + ")"
+	}
+	return text + " — " + e.Docs
 }
 
 // Code returns the stable SCREAMING_SNAKE identifier.
@@ -37,17 +47,7 @@ func causedError(code, hint string, cause error) *Error {
 }
 
 func docsURL(code string) string {
-	return docsBaseURL + asciiLower(code)
-}
-
-func asciiLower(value string) string {
-	bytes := []byte(value)
-	for i, b := range bytes {
-		if b >= 'A' && b <= 'Z' {
-			bytes[i] = b + ('a' - 'A')
-		}
-	}
-	return string(bytes)
+	return docsBaseURL + strings.ToLower(code)
 }
 
 // Error classes are the closed signed action-refusal vocabulary.
@@ -87,15 +87,17 @@ func actionError(status int, class, message string) *Error {
 		Class:     class,
 		Message:   message,
 		ErrorCode: code,
-		Hint:      actionHint(class, message),
+		Hint:      actionHint(class),
 		Docs:      docsURL(code),
 	}
 }
 
-func actionHint(class, detail string) string {
+// One canned hint per class: the variable detail rides `message`, so a hint stays
+// a stable, greppable string an integrator can search the catalogue for.
+func actionHint(class string) string {
 	switch class {
 	case ClassInvalidRequest:
-		return "Compare the signed action request with CONTRACT.md and fix the invalid field: " + detail + "."
+		return "Compare the signed action request with CONTRACT.md and fix the invalid field."
 	case ClassBadSignature:
 		return "Verify ROOTCAUSE_ACTION_SECRET and sign the exact transmitted bytes."
 	case ClassReplay:

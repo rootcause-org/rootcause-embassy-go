@@ -218,8 +218,9 @@ func WidgetTagHTML(w Widget) (string, error) {
 	if strings.TrimSpace(w.Token) == "" {
 		return "", refusal("NO_TOKEN", "Mint a fresh embed token for this page render and pass it as Widget.Token.")
 	}
-	if w.Mode != "" && w.Mode != "page" {
-		return "", refusal("WIDGET_MODE_INVALID", "Set Widget.Mode to page for an embedded surface, or leave it empty for the floating widget.")
+	// The loader's vocabulary is exactly page|bubble; an empty Mode is the bubble.
+	if w.Mode != "" && w.Mode != "page" && w.Mode != "bubble" {
+		return "", refusal("WIDGET_MODE_INVALID", "Set Widget.Mode to page or bubble, or leave it empty for the floating widget.")
 	}
 	if (w.Mode == "page") != (strings.TrimSpace(w.Target) != "") {
 		return "", refusal("WIDGET_TARGET_INVALID", "Set a non-empty Widget.Target only when Widget.Mode is page.")

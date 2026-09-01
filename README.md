@@ -175,8 +175,10 @@ Notes:
 | fetch the script by digest, signed, and re-hash it | `502 resolve_failed` |
 | execute (skipped on `dry_run`) | `200` with `ok:false` |
 
-Every answer — including every refusal — is signed. The one exception is the `405 + Allow: POST` a
-non-POST gets at the mount: that is the deliberately unsigned liveness floor an operator probes.
+Every answer — including every refusal — is signed. Two deliberate exceptions carry no signature
+because there is no key to sign with or nothing to protect: the `405 + Allow: POST` a non-POST gets
+at the mount (the liveness floor an operator probes) and the `503 ACTION_PLANE_DISABLED` a chat-only
+deployment returns from mounted action routes.
 
 The whole pipeline (script fetch **and** execution) runs under one 22s deadline, so a slow fetch still
 leaves time for a signed answer inside the host's 25s one-shot wait.
@@ -283,7 +285,7 @@ tag, err := emb.ChatWidgetTagHTML(chat.Claims{
 	Tenant:      currentTenant.Slug,            // from your server-side authorized context
 	Locale:      "nl",
 	ColorScheme: "light",
-}, chat.Widget{Mode: "page", Target: "#rc-chat"})
+}, chat.Widget{Mode: "page", Target: "#rc-chat"}) // Mode "page" requires Target; omit both for the floating bubble
 ```
 
 Render `tag` in your layout. `ChatWidgetTagHTML` uses the configured `ChatBaseURL`; the standalone
@@ -320,5 +322,6 @@ every read, so each worker warms its own cache safely.
 make check   # build + vet + golangci-lint + test
 ```
 
-The conformance suite in `internal/contract/` replays the hub's canonical fixtures byte-for-byte and
-prints the hub commit its `testdata/` was vendored from.
+The conformance suite in `internal/contract/` replays the hub's canonical fixtures — status, `class`
+and `message` must match the golden exactly, and every refusal additionally carries `code`, `hint` and
+`docs` — and prints the hub commit its `testdata/` was vendored from.

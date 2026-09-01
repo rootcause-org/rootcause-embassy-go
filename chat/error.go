@@ -1,5 +1,7 @@
 package chat
 
+import "strings"
+
 const docsBaseURL = "https://github.com/rootcause-org/rootcause-embassy/blob/main/docs/integrator/errors.md#"
 
 // Error is a stable chat integration failure. Use errors.As and Code() instead
@@ -19,15 +21,5 @@ func (e *Error) Code() string { return e.ErrorCode }
 func (e *Error) Unwrap() error { return e.Cause }
 
 func refusal(code, hint string) *Error {
-	return &Error{ErrorCode: code, Hint: hint, Docs: docsBaseURL + asciiLower(code)}
-}
-
-func asciiLower(value string) string {
-	bytes := []byte(value)
-	for i, b := range bytes {
-		if b >= 'A' && b <= 'Z' {
-			bytes[i] = b + ('a' - 'A')
-		}
-	}
-	return string(bytes)
+	return &Error{ErrorCode: code, Hint: hint, Docs: docsBaseURL + strings.ToLower(code)}
 }

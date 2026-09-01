@@ -140,10 +140,8 @@ func (a *API) Do(ctx context.Context, method, path string, body any, params url.
 				break
 			}
 		}
-		if code, ok := object["code"].(string); ok && code != "" {
-			result.Error = code
-		}
 	}
+	// A named host code beats the prose message: it is what a caller branches on.
 	if refusal.Code() != "HOST_REFUSED" {
 		result.Error = refusal.Code()
 	}

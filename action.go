@@ -293,6 +293,10 @@ func writeMethodNotAllowed(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`{"ok":false,"error":{"class":"` + classMethodNotAllowed + `","message":"POST required","code":"METHOD_NOT_ALLOWED","hint":"Send a POST request to the action mount, or a GET request to its health child.","docs":"` + docsURL("METHOD_NOT_ALLOWED") + `"}}`))
 }
 
+// The SECOND unsigned refusal, alongside the 405 liveness floor: with no action
+// secret configured there is no key to sign with, so a chat-only deployment that
+// mounts the action routes answers 503 in the clear. Nothing here is a security
+// decision — the host never trusts an unverified body.
 func writeActionPlaneDisabled(w http.ResponseWriter) {
 	err := publicError("ACTION_PLANE_DISABLED", "Configure ROOTCAUSE_ACTION_SECRET and ROOTCAUSE_FETCH_URL before mounting action routes.")
 	w.Header().Set("Content-Type", "application/json")
