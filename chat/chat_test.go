@@ -159,3 +159,28 @@ func TestWidgetTagOmitsUnsetAttributes(t *testing.T) {
 		t.Fatalf("default base url = %q, %v", defaultTag, err)
 	}
 }
+
+func TestWidgetTagRejectsInvalidModeTargetCombinations(t *testing.T) {
+	tests := []struct {
+		name   string
+		widget chat.Widget
+		code   string
+	}{
+		{name: "unknown mode", widget: chat.Widget{Mode: "drawer"}, code: "WIDGET_MODE_INVALID"},
+		{name: "page without target", widget: chat.Widget{Mode: "page"}, code: "WIDGET_TARGET_INVALID"},
+		{name: "page with blank target", widget: chat.Widget{Mode: "page", Target: "  "}, code: "WIDGET_TARGET_INVALID"},
+		{name: "target without page", widget: chat.Widget{Target: "#chat"}, code: "WIDGET_TARGET_INVALID"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.widget.Project = "acme"
+			test.widget.Token = "token"
+			_, err := chat.WidgetTagHTML(test.widget)
+			var refusal *chat.Error
+			if !errors.As(err, &refusal) || refusal.Code() != test.code {
+				t.Fatalf("error = %v, want code %s", err, test.code)
+			}
+		})
+	}
+}

@@ -218,6 +218,12 @@ func WidgetTagHTML(w Widget) (string, error) {
 	if strings.TrimSpace(w.Token) == "" {
 		return "", refusal("NO_TOKEN", "Mint a fresh embed token for this page render and pass it as Widget.Token.")
 	}
+	if w.Mode != "" && w.Mode != "page" {
+		return "", refusal("WIDGET_MODE_INVALID", "Set Widget.Mode to page for an embedded surface, or leave it empty for the floating widget.")
+	}
+	if (w.Mode == "page") != (strings.TrimSpace(w.Target) != "") {
+		return "", refusal("WIDGET_TARGET_INVALID", "Set a non-empty Widget.Target only when Widget.Mode is page.")
+	}
 
 	attributes := [][2]string{
 		{"src", baseURL + loaderPath + "?v=" + loaderRevision},
