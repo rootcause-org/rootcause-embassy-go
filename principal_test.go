@@ -24,6 +24,7 @@ func TestValidatePrincipal(t *testing.T) {
 
 	for _, body := range []string{
 		`{"principal":null}`,
+		`{"principal":{"kind":"kind","external_id":"user"}}`,
 		`{"principal":{"kind":"","external_id":"user","claims":{}}}`,
 		`{"principal":{"kind":"kind","external_id":"user","claims":{"Bad":"x"}}}`,
 		`{"principal":{"kind":"kind","external_id":"user","claims":{"id":1.5}}}`,
@@ -33,6 +34,13 @@ func TestValidatePrincipal(t *testing.T) {
 		if _, err := validatePrincipal(decode(t, body).(map[string]any)); err == nil {
 			t.Fatalf("validatePrincipal(%s) unexpectedly accepted", body)
 		}
+	}
+	emptyClaims, err := validatePrincipal(decode(t, `{"principal":{"kind":"kind","external_id":"user","claims":{}}}`).(map[string]any))
+	if err != nil {
+		t.Fatalf("empty claims: %v", err)
+	}
+	if emptyClaims == nil || len(emptyClaims.Claims()) != 0 {
+		t.Fatalf("empty claims principal = %#v", emptyClaims)
 	}
 	if principal, err := validatePrincipal(decode(t, `{}`).(map[string]any)); err != nil || principal != nil {
 		t.Fatalf("absent principal = %#v, %v", principal, err)

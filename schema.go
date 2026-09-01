@@ -22,6 +22,7 @@ func isReservedTenantParam(name string) bool {
 	canonical := strings.ToLower(name)
 	return reservedTenantParams[canonical] || strings.HasPrefix(canonical, "rc_tenant_") ||
 		canonical == "principal_kind" || canonical == "principal_external_id" ||
+		strings.HasPrefix(canonical, "principal_claim_") ||
 		strings.HasPrefix(canonical, "rc_principal_")
 }
 

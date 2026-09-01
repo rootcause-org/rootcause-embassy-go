@@ -105,6 +105,18 @@ func TestValidateParams(t *testing.T) {
 			wantErr: "reserved param(s): RC_Principal_Custom",
 		},
 		{
+			name:    "principal claim selectors are reserved in params",
+			params:  `{"principal_claim_user_id":"sneaky"}`,
+			schema:  `{"principal_claim_user_id":{"type":"string"}}`,
+			wantErr: "reserved param(s): principal_claim_user_id",
+		},
+		{
+			name:    "principal claim selectors are reserved in the schema",
+			params:  `{}`,
+			schema:  `{"Principal_Claim_User_ID":{"type":"string"}}`,
+			wantErr: "reserved param(s): Principal_Claim_User_ID",
+		},
+		{
 			name:    "a missing schema fails closed",
 			params:  `{"email":"x"}`,
 			schema:  ``,
