@@ -291,6 +291,8 @@ tag, err := emb.ChatWidgetTagHTML(chat.Claims{
 Render `tag` in your layout. `ChatWidgetTagHTML` uses the configured `ChatBaseURL`; the standalone
 `chat.WidgetTagHTML` also defaults its base URL to `https://app.replypen.com`. **Mint a fresh token per
 render** — tokens are short-lived and the `jti` is single-use when opening a session.
+If the Chat Studio brief has an empty `principal_kinds` list, omit both `Kind` and `ExternalID`; otherwise
+derive both from the authenticated server session and use one kind declared by the brief.
 
 ## Multi-worker deployments
 

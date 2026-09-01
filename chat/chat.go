@@ -1,7 +1,8 @@
 // Package chat is the MINT side of rootcause's embedded-chat trust boundary.
 //
-// Your backend mints a short-lived HS256 token asserting who is chatting (and, on
-// a tenant-enabled project, inside which tenant); rootcause only ever VERIFIES it.
+// Your backend mints a short-lived HS256 token asserting who is chatting when the
+// project declares principal kinds (and, on a tenant-enabled project, inside which
+// tenant); rootcause only ever VERIFIES it.
 // The browser never sees the key, so it cannot mint a token for another user,
 // tenant, origin or a later expiry.
 //
@@ -54,7 +55,8 @@ type Claims struct {
 	// `aud` (rootcause:chat:<project>).
 	Project string
 	// ExternalID is the opaque, stable user id rootcause anchors a conversation to
-	// — never a name or an email.
+	// — never a name or an email. Leave ExternalID and Kind both empty only when
+	// the ReplyPen project declares no principal kinds.
 	ExternalID string
 	// Kind names the identity namespace ExternalID lives in, e.g. "acme_user".
 	Kind string
@@ -113,10 +115,10 @@ func MintEmbedToken(secret string, claims Claims) (string, error) {
 	if strings.TrimSpace(claims.Project) == "" {
 		return "", refusal("CHAT_PROJECT_REQUIRED", "Set Claims.Project, or Config.ChatProject, to the public ReplyPen project slug.")
 	}
-	if strings.TrimSpace(claims.ExternalID) == "" {
+	if strings.TrimSpace(claims.ExternalID) == "" && strings.TrimSpace(claims.Kind) != "" {
 		return "", refusal("CHAT_EXTERNAL_ID_REQUIRED", "Set Claims.ExternalID from the signed-in server session's stable user identifier.")
 	}
-	if strings.TrimSpace(claims.Kind) == "" {
+	if strings.TrimSpace(claims.Kind) == "" && strings.TrimSpace(claims.ExternalID) != "" {
 		return "", refusal("PRINCIPAL_REQUIRED", "Set Claims.Kind to the principal kind configured for this ReplyPen project.")
 	}
 	origin, err := CanonicalOrigin(claims.Origin)

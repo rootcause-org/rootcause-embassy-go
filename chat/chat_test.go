@@ -125,6 +125,22 @@ func TestMintRefusals(t *testing.T) {
 	}
 }
 
+func TestMintAllowsNoPrincipalWhenProjectDeclaresNoKinds(t *testing.T) {
+	claims := chat.Claims{Project: "flat", Origin: "https://app.example.com", JTI: "88888888-8888-4888-8888-888888888888", IssuedAt: time.Unix(1_700_000_000, 0)}
+	token, err := chat.MintEmbedToken(secret, claims)
+	if err != nil {
+		t.Fatalf("mint no-principal token: %v", err)
+	}
+	payload := verify(t, token, secret)
+	if payload["sub"] != "" {
+		t.Fatalf("sub = %#v, want empty", payload["sub"])
+	}
+	principal, ok := payload["principal"].(map[string]any)
+	if !ok || principal["kind"] != "" || principal["external_id"] != "" {
+		t.Fatalf("principal = %#v, want empty identity", payload["principal"])
+	}
+}
+
 func TestCanonicalOrigin(t *testing.T) {
 	cases := map[string]string{
 		"https://Admin.Example.com":      "https://admin.example.com",
