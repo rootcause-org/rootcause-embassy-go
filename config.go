@@ -10,7 +10,7 @@ import (
 )
 
 // Version is this Embassy's release, surfaced by the health endpoint.
-const Version = "0.3.0"
+const Version = "0.3.1"
 
 // Protocol is the wire protocol generation. Bumped ONLY on a breaking change:
 // additive fields stay non-breaking because the action/result direction decodes
