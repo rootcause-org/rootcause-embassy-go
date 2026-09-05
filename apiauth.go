@@ -104,29 +104,29 @@ func exchangeRefreshToken(ctx context.Context, cfg *Config, baseURL, refreshToke
 	endpoint := strings.TrimSuffix(baseURL, "/") + "/oauth/token"
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", 0, causedError("TOKEN_EXCHANGE_FAILED", "Check ROOTCAUSE_API_BASE_URL and retry the token exchange.", err)
+		return "", 0, causedError("TOKEN_EXCHANGE_FAILED", err).WithDetail("the token request could not be built")
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	response, err := cfg.HTTPClient.Do(request)
 	if err != nil {
-		return "", 0, causedError("API_TRANSPORT_ERROR", "The OAuth token endpoint could not be reached; check connectivity and retry.", err)
+		return "", 0, causedError("API_TRANSPORT_ERROR", err).WithDetail("oauth token exchange")
 	}
 	defer func() { _ = response.Body.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return "", 0, causedError("TOKEN_EXCHANGE_FAILED", "The OAuth token response could not be read; retry the request.", err)
+		return "", 0, causedError("TOKEN_EXCHANGE_FAILED", err).WithDetail("the token response could not be read")
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		return "", 0, hostRefusal(parseAPIBody(raw), response.StatusCode)
 	}
 	var payload tokenResponse
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", 0, causedError("TOKEN_EXCHANGE_FAILED", "The OAuth token endpoint returned invalid JSON; capture the status and escalate.", err)
+		return "", 0, causedError("TOKEN_EXCHANGE_FAILED", err).WithDetail("the token response was not valid JSON")
 	}
 	if payload.AccessToken == "" {
-		return "", 0, publicError("TOKEN_EXCHANGE_FAILED", "The OAuth token response omitted access_token; capture the response status and escalate.")
+		return "", 0, publicError("TOKEN_EXCHANGE_FAILED").WithDetail("the token response omitted access_token")
 	}
 	expiresIn := defaultExpiresIn
 	if payload.ExpiresIn > 0 {

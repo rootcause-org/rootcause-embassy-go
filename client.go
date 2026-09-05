@@ -144,10 +144,10 @@ type proposedBody struct {
 // anything is sent.
 func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (Analysis, error) {
 	if e.cfg.TriggerURL == "" {
-		return Analysis{}, publicError("ANALYSIS_TRIGGER_URL_REQUIRED", "Set ROOTCAUSE_TRIGGER_URL before starting an analysis.")
+		return Analysis{}, publicError("ANALYSIS_TRIGGER_URL_REQUIRED")
 	}
 	if request.Body == "" {
-		return Analysis{}, publicError("ANALYSIS_BODY_REQUIRED", "Set AnalysisRequest.Body to the text ReplyPen should analyze.")
+		return Analysis{}, publicError("ANALYSIS_BODY_REQUIRED")
 	}
 	secret, err := e.cfg.outboundSecret(request.ProjectID)
 	if err != nil {
@@ -158,7 +158,7 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 	}
 	if request.Principal != nil {
 		if request.Principal.Kind == "" || request.Principal.ExternalID == "" {
-			return Analysis{}, publicError("PRINCIPAL_REQUIRED", "Set both Principal.Kind and Principal.ExternalID from the signed-in server session.")
+			return Analysis{}, publicError("PRINCIPAL_REQUIRED")
 		}
 	}
 
@@ -183,7 +183,7 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 		Tenant:      request.Tenant,
 	})
 	if err != nil {
-		return Analysis{}, causedError("ANALYSIS_REQUEST_INVALID", "Use JSON-compatible values in the analysis request.", err)
+		return Analysis{}, causedError("ANALYSIS_REQUEST_INVALID", err)
 	}
 
 	body, err := e.postSigned(ctx, e.cfg.TriggerURL, raw, "analysis trigger", secret)
@@ -192,7 +192,7 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 	}
 	var analysis Analysis
 	if err := json.Unmarshal(body, &analysis); err != nil || analysis.AnalysisID == "" {
-		return Analysis{}, causedError("ANALYSIS_RESPONSE_INVALID", "The analysis response omitted analysis_id; capture the status and escalate.", err)
+		return Analysis{}, causedError("ANALYSIS_RESPONSE_INVALID", err).WithDetail("the response omitted analysis_id")
 	}
 	e.logger().Info("rootcause analysis triggered",
 		"analysis_id", analysis.AnalysisID,
@@ -208,17 +208,17 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 // the updated result back over the result route.
 func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageRequest) (SentMessage, error) {
 	if e.cfg.SentMessageURL == "" {
-		return SentMessage{}, publicError("SENT_MESSAGE_URL_REQUIRED", "Set ROOTCAUSE_SENT_MESSAGE_URL before capturing a sent message.")
+		return SentMessage{}, publicError("SENT_MESSAGE_URL_REQUIRED")
 	}
 	if request.SessionID == "" {
-		return SentMessage{}, publicError("SESSION_ID_REQUIRED", "Set SentMessageRequest.SessionID to the ReplyPen session being continued.")
+		return SentMessage{}, publicError("SESSION_ID_REQUIRED")
 	}
 	secret, err := e.cfg.outboundSecret(request.ProjectID)
 	if err != nil {
 		return SentMessage{}, err
 	}
 	if request.SentBody == "" && len(request.Answers) == 0 {
-		return SentMessage{}, publicError("SENT_MESSAGE_CONTENT_REQUIRED", "Set SentBody, Answers, or both before capturing a sent message.")
+		return SentMessage{}, publicError("SENT_MESSAGE_CONTENT_REQUIRED")
 	}
 
 	payload := sentMessagePayload{
@@ -238,7 +238,7 @@ func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageReq
 
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return SentMessage{}, causedError("SENT_MESSAGE_INVALID", "Use JSON-compatible values in the sent-message request.", err)
+		return SentMessage{}, causedError("SENT_MESSAGE_INVALID", err)
 	}
 
 	body, err := e.postSigned(ctx, e.cfg.SentMessageURL, raw, "sent-message capture", secret)
@@ -248,7 +248,7 @@ func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageReq
 	var result SentMessage
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &result); err != nil {
-			return SentMessage{}, causedError("SENT_MESSAGE_RESPONSE_INVALID", "The sent-message response was invalid JSON; capture the status and escalate.", err)
+			return SentMessage{}, causedError("SENT_MESSAGE_RESPONSE_INVALID", err)
 		}
 	}
 	// Byte counts, never bodies; metadata KEYS, never values.
@@ -266,20 +266,20 @@ func (e *Embassy) CaptureSentMessage(ctx context.Context, request SentMessageReq
 func (e *Embassy) postSigned(ctx context.Context, url string, raw []byte, label, secret string) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
-		return nil, causedError("API_REQUEST_INVALID", "Check the configured endpoint URL and request fields.", err)
+		return nil, causedError("API_REQUEST_INVALID", err).WithDetail(label)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(SignatureHeader, Sign(raw, secret))
 
 	response, err := e.cfg.HTTPClient.Do(request)
 	if err != nil {
-		return nil, causedError("API_TRANSPORT_ERROR", "The ReplyPen endpoint could not be reached; check connectivity and retry.", err)
+		return nil, causedError("API_TRANSPORT_ERROR", err).WithDetail(label)
 	}
 	defer func() { _ = response.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return nil, causedError("API_RESPONSE_INVALID", "The ReplyPen response could not be read; retry and escalate if it persists.", err)
+		return nil, causedError("API_RESPONSE_INVALID", err).WithDetail(label)
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		return nil, hostRefusal(parseAPIBody(body), response.StatusCode)
@@ -294,16 +294,16 @@ func (e *Embassy) checkAttachments(attachments []Attachment) error {
 	for _, attachment := range attachments {
 		decoded, err := base64.StdEncoding.DecodeString(attachment.ContentBase64)
 		if err != nil {
-			return publicError("ATTACHMENT_INVALID", "Encode every attachment's ContentBase64 with standard base64 before sending.")
+			return publicError("ATTACHMENT_INVALID")
 		}
 		if len(decoded) > e.cfg.MaxAttachmentBytes {
-			return publicError("ATTACHMENT_TOO_LARGE", "Reduce each decoded attachment below Config.MaxAttachmentBytes.")
+			return publicError("ATTACHMENT_TOO_LARGE")
 		}
 		total += len(decoded)
 		// The host's aggregate ceiling: without this a set of individually legal
 		// attachments uploads in full and is rejected on arrival.
 		if total > maxTotalAttachmentBytes {
-			return publicError("ATTACHMENTS_TOO_LARGE", "Reduce the combined decoded attachments below the ReplyPen request limit.")
+			return publicError("ATTACHMENTS_TOO_LARGE")
 		}
 	}
 	return nil

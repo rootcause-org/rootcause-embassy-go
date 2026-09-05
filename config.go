@@ -205,16 +205,16 @@ func (c *Config) validateAction() error {
 		return err
 	}
 	if isPlaceholderFetchURL(c.FetchURL) {
-		return publicError("ACTION_FETCH_URL_REQUIRED", "Set ROOTCAUSE_FETCH_URL to the absolute ReplyPen script endpoint before enabling actions.")
+		return publicError("ACTION_FETCH_URL_REQUIRED")
 	}
 	if c.Timeout <= 0 {
-		return publicError("ACTION_TIMEOUT_INVALID", "Set Timeout to a positive duration shorter than TotalDeadline.")
+		return publicError("ACTION_TIMEOUT_INVALID")
 	}
 	if c.TotalDeadline <= c.Timeout {
-		return publicError("ACTION_DEADLINE_INVALID", "Set TotalDeadline greater than Timeout so the Embassy can refuse before the host cutoff.")
+		return publicError("ACTION_DEADLINE_INVALID")
 	}
 	if c.ClockSkew <= 0 {
-		return publicError("ACTION_CLOCK_SKEW_INVALID", "Set ClockSkew to a positive duration.")
+		return publicError("ACTION_CLOCK_SKEW_INVALID")
 	}
 	return c.validateTenantlessActions()
 }
@@ -257,23 +257,23 @@ func (c *Config) validateSecrets() error {
 	hasMap := len(c.Secrets) > 0
 	if hasSecret == hasMap {
 		if hasSecret {
-			return publicError("ACTION_SECRETS_INVALID", "Configure exactly one of Secret or Secrets, never both.")
+			return publicError("ACTION_SECRETS_INVALID")
 		}
-		return publicError("ACTION_SECRET_REQUIRED", "Set ROOTCAUSE_ACTION_SECRET, or Config.Secrets, before enabling the action or analysis plane.")
+		return publicError("ACTION_SECRET_REQUIRED")
 	}
 	if hasMap {
 		seen := make(map[string]struct{}, len(c.Secrets))
 		for projectID, secret := range c.Secrets {
 			if !validProjectID(projectID) {
-				return publicError("ACTION_SECRETS_INVALID", "Every Config.Secrets key must be a non-nil project UUID.")
+				return publicError("ACTION_SECRETS_INVALID")
 			}
 			canonical := strings.ToLower(projectID)
 			if _, exists := seen[canonical]; exists {
-				return publicError("ACTION_SECRETS_INVALID", "Config.Secrets must not contain duplicate project UUIDs with different casing.")
+				return publicError("ACTION_SECRETS_INVALID")
 			}
 			seen[canonical] = struct{}{}
 			if strings.TrimSpace(secret) == "" {
-				return publicError("ACTION_SECRETS_INVALID", "Every Config.Secrets value must be a non-blank action reverse secret.")
+				return publicError("ACTION_SECRETS_INVALID")
 			}
 		}
 	}
@@ -306,14 +306,14 @@ func (c *Config) secretForProject(projectID string) (string, bool) {
 
 func (c *Config) outboundSecret(projectID string) (string, error) {
 	if !c.actionEnabled() {
-		return "", publicError("ACTION_PLANE_DISABLED", "Configure ROOTCAUSE_ACTION_SECRET and ROOTCAUSE_FETCH_URL before using actions or analysis.")
+		return "", publicError("ACTION_PLANE_DISABLED")
 	}
 	if len(c.Secrets) == 0 {
 		return c.Secret, nil
 	}
 	secret, ok := c.secretForProject(projectID)
 	if !ok {
-		return "", publicError("ACTION_PROJECT_UNKNOWN", "Set ProjectID to a project UUID present in Config.Secrets.")
+		return "", publicError("ACTION_PROJECT_UNKNOWN")
 	}
 	return secret, nil
 }
@@ -325,38 +325,38 @@ func (c *Config) validateAPI() error {
 		return nil
 	}
 	if c.APIBaseURL == "" {
-		return publicError("API_BASE_URL_REQUIRED", "Set ROOTCAUSE_API_BASE_URL when ROOTCAUSE_API_KEY is configured.")
+		return publicError("API_BASE_URL_REQUIRED")
 	}
 	if c.APIKey == "" {
-		return publicError("API_KEY_REQUIRED", "Set ROOTCAUSE_API_KEY when ROOTCAUSE_API_BASE_URL is configured.")
+		return publicError("API_KEY_REQUIRED")
 	}
 	if !isAbsoluteHTTPURL(c.APIBaseURL) {
-		return publicError("API_BASE_URL_INVALID", "Set ROOTCAUSE_API_BASE_URL to an absolute http or https URL.")
+		return publicError("API_BASE_URL_INVALID")
 	}
 	return nil
 }
 
 func (c *Config) validateChat() error {
 	if !isAbsoluteHTTPURL(c.ChatBaseURL) {
-		return publicError("CHAT_BASE_URL_INVALID", "Set ROOTCAUSE_CHAT_BASE_URL to an absolute http or https URL.")
+		return publicError("CHAT_BASE_URL_INVALID")
 	}
 	if c.ChatSecret == "" && c.ChatProject == "" {
 		return nil
 	}
 	if c.ChatSecret == "" {
-		return publicError("CHAT_SECRET_REQUIRED", "Set ROOTCAUSE_CHAT_SECRET to the project's chat signing secret.")
+		return publicError("CHAT_SECRET_REQUIRED")
 	}
 	if c.ChatProject == "" {
-		return publicError("CHAT_PROJECT_REQUIRED", "Set ROOTCAUSE_CHAT_PROJECT to the public ReplyPen project slug.")
+		return publicError("CHAT_PROJECT_REQUIRED")
 	}
 	// Two different privilege boundaries. The same value in both means one of the
 	// two env vars points at the wrong secret.
 	if c.ChatSecret == c.Secret {
-		return publicError("CHAT_SECRET_REUSED", "Use different values for ROOTCAUSE_CHAT_SECRET and ROOTCAUSE_ACTION_SECRET.")
+		return publicError("CHAT_SECRET_REUSED")
 	}
 	for _, secret := range c.Secrets {
 		if c.ChatSecret == secret {
-			return publicError("CHAT_SECRET_REUSED", "Use a chat signing secret that differs from every action reverse secret.")
+			return publicError("CHAT_SECRET_REUSED")
 		}
 	}
 	return nil

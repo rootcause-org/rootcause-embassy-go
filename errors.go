@@ -2,53 +2,23 @@ package embassy
 
 import (
 	"fmt"
-	"strings"
+
+	"github.com/rootcause-org/rootcause-embassy-go/internal/rcerr"
 )
 
-const docsBaseURL = "https://github.com/rootcause-org/rootcause-embassy/blob/main/docs/integrator/errors.md#"
+// Error is a stable, customer-facing failure. ErrorCode is exposed through Code()
+// so callers can branch with errors.As without parsing prose. The definition is
+// shared with the chat package; the customer-facing name is this one.
+type Error = rcerr.Error
 
-// Error is a stable, customer-facing failure. ErrorCode is exposed through
-// Code() so callers can branch with errors.As without parsing prose.
-type Error struct {
-	Status    int
-	Class     string
-	Message   string
-	ErrorCode string
-	Hint      string
-	Docs      string
-	Cause     error
-}
+// publicError builds the canonical error for a code. The hint comes from the one
+// code → hint table — a call site that needs to say more attaches a detail with
+// WithDetail, it does not invent a second sentence for the same code.
+func publicError(code string) *Error { return rcerr.New(code) }
 
-// The stable prefix is the CODE; the wire `message` detail is appended when it
-// adds something the canned hint does not, so a log line still names the field
-// or value that was refused.
-func (e *Error) Error() string {
-	text := e.Code() + ": " + e.Hint
-	if e.Message != "" && e.Message != e.Hint {
-		text += " (" + e.Message + ")"
-	}
-	return text + " — " + e.Docs
-}
+func causedError(code string, cause error) *Error { return rcerr.Caused(code, cause) }
 
-// Code returns the stable SCREAMING_SNAKE identifier.
-func (e *Error) Code() string { return e.ErrorCode }
-
-// Unwrap preserves sentinel and transport matching without exposing cause text.
-func (e *Error) Unwrap() error { return e.Cause }
-
-func publicError(code, hint string) *Error {
-	return &Error{ErrorCode: code, Hint: hint, Docs: docsURL(code)}
-}
-
-func causedError(code, hint string, cause error) *Error {
-	err := publicError(code, hint)
-	err.Cause = cause
-	return err
-}
-
-func docsURL(code string) string {
-	return docsBaseURL + strings.ToLower(code)
-}
+func docsURL(code string) string { return rcerr.DocsURL(code) }
 
 // Error classes are the closed signed action-refusal vocabulary.
 const (
@@ -77,40 +47,17 @@ var actionCodes = map[string]string{
 	ClassInternalError:   "INTERNAL_ERROR",
 }
 
+// The variable detail rides the wire `message`, so the hint stays a stable,
+// greppable string an integrator can search the catalogue for.
 func actionError(status int, class, message string) *Error {
 	code := actionCodes[class]
 	if code == "" {
 		code = "INTERNAL_ERROR"
 	}
-	return &Error{
-		Status:    status,
-		Class:     class,
-		Message:   message,
-		ErrorCode: code,
-		Hint:      actionHint(class),
-		Docs:      docsURL(code),
-	}
-}
-
-// One canned hint per class: the variable detail rides `message`, so a hint stays
-// a stable, greppable string an integrator can search the catalogue for.
-func actionHint(class string) string {
-	switch class {
-	case ClassInvalidRequest:
-		return "Compare the signed action request with CONTRACT.md and fix the invalid field."
-	case ClassBadSignature:
-		return "Verify ROOTCAUSE_ACTION_SECRET and sign the exact transmitted bytes."
-	case ClassReplay:
-		return "Use a fresh nonce and a current issued_at; never blindly retry an action with an uncertain outcome."
-	case ClassSchemaViolation:
-		return "Match action param names and types to the approved schema and keep tenant identity out of params."
-	case ClassResolveFailed:
-		return "Check ROOTCAUSE_FETCH_URL and run a dry run; never bypass signature or digest verification."
-	case ClassHandlerError:
-		return "Configure an idempotent ResultHandler and verify it with the analysis result fixture."
-	default:
-		return "Upgrade the Embassy and rerun the conformance suite, then escalate with a redacted doctor bundle."
-	}
+	err := publicError(code).WithDetail(message)
+	err.Status = status
+	err.Class = class
+	return err
 }
 
 func invalidRequest(format string, a ...any) *Error {

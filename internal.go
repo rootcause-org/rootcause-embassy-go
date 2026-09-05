@@ -2,13 +2,14 @@ package embassy
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"reflect"
 	"sort"
+
+	"github.com/rootcause-org/rootcause-embassy-go/internal/uuid"
 )
 
 // decodeJSONObject decodes into a generic map with UseNumber, so an integer param
@@ -60,15 +61,8 @@ type panicError struct{ value any }
 
 func (p *panicError) Error() string { return fmt.Sprintf("panic: %v", p.value) }
 
-// crypto/rand.Read never returns an error (it panics if the OS source fails), so
-// a nonce/jti is never silently predictable.
-func newUUID() string {
-	var b [16]byte
-	rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
+// newUUID is the default Config.Nonce generator.
+func newUUID() string { return uuid.New() }
 
 func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))

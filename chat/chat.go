@@ -13,17 +13,17 @@ package chat
 
 import (
 	"crypto/hmac"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"html"
 	"net"
 	"net/url"
 	"strings"
 	"time"
 
-	"crypto/sha256"
+	"github.com/rootcause-org/rootcause-embassy-go/internal/rcerr"
+	"github.com/rootcause-org/rootcause-embassy-go/internal/uuid"
 )
 
 // DefaultTTL is the token lifetime the host is tuned for. The jti is single-use
@@ -110,16 +110,16 @@ type tokenPrincipal struct {
 func MintEmbedToken(secret string, claims Claims) (string, error) {
 	// A blank key fails closed: HMAC with a zero-length key is trivially forgeable.
 	if strings.TrimSpace(secret) == "" {
-		return "", refusal("CHAT_SECRET_REQUIRED", "Set ROOTCAUSE_CHAT_SECRET to the project's chat signing secret.")
+		return "", refusal("CHAT_SECRET_REQUIRED")
 	}
 	if strings.TrimSpace(claims.Project) == "" {
-		return "", refusal("CHAT_PROJECT_REQUIRED", "Set Claims.Project, or Config.ChatProject, to the public ReplyPen project slug.")
+		return "", refusal("CHAT_PROJECT_REQUIRED")
 	}
 	if strings.TrimSpace(claims.ExternalID) == "" && strings.TrimSpace(claims.Kind) != "" {
-		return "", refusal("CHAT_EXTERNAL_ID_REQUIRED", "Set Claims.ExternalID from the signed-in server session's stable user identifier.")
+		return "", refusal("CHAT_EXTERNAL_ID_REQUIRED")
 	}
 	if strings.TrimSpace(claims.Kind) == "" && strings.TrimSpace(claims.ExternalID) != "" {
-		return "", refusal("PRINCIPAL_REQUIRED", "Set Claims.Kind to the principal kind configured for this ReplyPen project.")
+		return "", refusal("PRINCIPAL_REQUIRED")
 	}
 	origin, err := CanonicalOrigin(claims.Origin)
 	if err != nil {
@@ -130,7 +130,7 @@ func MintEmbedToken(secret string, claims Claims) (string, error) {
 		ttl = DefaultTTL
 	}
 	if ttl < time.Second || ttl > MaxTTL {
-		return "", refusal("TOKEN_TTL_INVALID", "Set Claims.TTL between 1 second and 24 hours; 2 hours is the recommended default.")
+		return "", refusal("TOKEN_TTL_INVALID")
 	}
 	issuedAt := claims.IssuedAt
 	if issuedAt.IsZero() {
@@ -138,7 +138,7 @@ func MintEmbedToken(secret string, claims Claims) (string, error) {
 	}
 	jti := claims.JTI
 	if jti == "" {
-		jti = newUUID()
+		jti = uuid.New()
 	}
 	assertedBy := claims.AssertedBy
 	if assertedBy == "" {
@@ -171,7 +171,7 @@ func MintEmbedToken(secret string, claims Claims) (string, error) {
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", &Error{ErrorCode: "TOKEN_MINT_FAILED", Hint: "Use JSON-compatible UTF-8 claim values and retry minting.", Docs: docsBaseURL + "token_mint_failed", Cause: err}
+		return "", rcerr.Caused("TOKEN_MINT_FAILED", err)
 	}
 
 	// The header is exactly this, always. `alg` is checked BEFORE the signature
@@ -212,20 +212,20 @@ func WidgetTagHTML(w Widget) (string, error) {
 	}
 	baseURL, err := CanonicalOrigin(w.BaseURL)
 	if err != nil {
-		return "", refusal("CHAT_BASE_URL_INVALID", "Set Widget.BaseURL to an absolute http or https origin with no path.")
+		return "", refusal("CHAT_BASE_URL_INVALID")
 	}
 	if strings.TrimSpace(w.Project) == "" {
-		return "", refusal("CHAT_PROJECT_REQUIRED", "Set Widget.Project to the public ReplyPen project slug.")
+		return "", refusal("CHAT_PROJECT_REQUIRED")
 	}
 	if strings.TrimSpace(w.Token) == "" {
-		return "", refusal("NO_TOKEN", "Mint a fresh embed token for this page render and pass it as Widget.Token.")
+		return "", refusal("NO_TOKEN")
 	}
 	// The loader's vocabulary is exactly page|bubble; an empty Mode is the bubble.
 	if w.Mode != "" && w.Mode != "page" && w.Mode != "bubble" {
-		return "", refusal("WIDGET_MODE_INVALID", "Set Widget.Mode to page or bubble, or leave it empty for the floating widget.")
+		return "", refusal("WIDGET_MODE_INVALID")
 	}
 	if (w.Mode == "page") != (strings.TrimSpace(w.Target) != "") {
-		return "", refusal("WIDGET_TARGET_INVALID", "Set a non-empty Widget.Target only when Widget.Mode is page.")
+		return "", refusal("WIDGET_TARGET_INVALID")
 	}
 
 	attributes := [][2]string{
@@ -259,16 +259,16 @@ func WidgetTagHTML(w Widget) (string, error) {
 // byte, so a near-miss would read as a forged token far from its cause.
 func CanonicalOrigin(raw string) (string, error) {
 	if raw == "" {
-		return "", refusal("ORIGIN_INVALID", "Set Claims.Origin to the browser origin as scheme://host[:port].")
+		return "", refusal("ORIGIN_INVALID")
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "", refusal("ORIGIN_INVALID", "Set Claims.Origin to a valid http or https origin as scheme://host[:port].")
+		return "", refusal("ORIGIN_INVALID")
 	}
 	if (parsed.Scheme != "http" && parsed.Scheme != "https") ||
 		parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
 		(parsed.Path != "" && parsed.Path != "/") {
-		return "", refusal("ORIGIN_INVALID", "Set Claims.Origin to scheme://host[:port] with no path, query, fragment, or user information.")
+		return "", refusal("ORIGIN_INVALID")
 	}
 
 	host := strings.ToLower(parsed.Hostname())
@@ -285,13 +285,3 @@ func CanonicalOrigin(raw string) (string, error) {
 }
 
 func b64(raw []byte) string { return base64.RawURLEncoding.EncodeToString(raw) }
-
-// crypto/rand.Read never returns an error (it panics if the OS source fails), so
-// a jti is never silently predictable.
-func newUUID() string {
-	var b [16]byte
-	rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}

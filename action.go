@@ -302,7 +302,7 @@ func writeMethodNotAllowed(w http.ResponseWriter) {
 // mounts the action routes answers 503 in the clear. Nothing here is a security
 // decision — the host never trusts an unverified body.
 func writeActionPlaneDisabled(w http.ResponseWriter) {
-	err := publicError("ACTION_PLANE_DISABLED", "Configure ROOTCAUSE_ACTION_SECRET and ROOTCAUSE_FETCH_URL before mounting action routes.")
+	err := publicError("ACTION_PLANE_DISABLED")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	_ = json.NewEncoder(w).Encode(refusalEnvelope{Error: wireError{
@@ -315,7 +315,7 @@ func wireRefusal(err *Error) wireError {
 }
 
 func executionWireError(class, message string) *wireError {
-	err := publicError("ACTION_EXECUTION_FAILED", "Inspect the action outcome and application logs before deciding whether a retry is safe.")
+	err := publicError("ACTION_EXECUTION_FAILED")
 	return &wireError{Class: class, Message: message, Code: err.Code(), Hint: err.Hint, Docs: err.Docs}
 }
 
