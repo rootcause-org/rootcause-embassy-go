@@ -280,44 +280,6 @@ func (c *Config) validateSecrets() error {
 	return nil
 }
 
-func validProjectID(projectID string) bool {
-	return tenantIDPattern.MatchString(projectID) && !strings.EqualFold(projectID, nilUUID)
-}
-
-// secretForProject is the one selector used by every HMAC direction. In
-// single-secret mode project_id remains optional for legacy callbacks/probes.
-func (c *Config) secretForProject(projectID string) (string, bool) {
-	if len(c.Secrets) == 0 {
-		return c.Secret, c.Secret != ""
-	}
-	if !validProjectID(projectID) {
-		return "", false
-	}
-	if secret, ok := c.Secrets[projectID]; ok && strings.TrimSpace(secret) != "" {
-		return secret, true
-	}
-	for configuredID, secret := range c.Secrets {
-		if strings.EqualFold(configuredID, projectID) && strings.TrimSpace(secret) != "" {
-			return secret, true
-		}
-	}
-	return "", false
-}
-
-func (c *Config) outboundSecret(projectID string) (string, error) {
-	if !c.actionEnabled() {
-		return "", publicError("ACTION_PLANE_DISABLED")
-	}
-	if len(c.Secrets) == 0 {
-		return c.Secret, nil
-	}
-	secret, ok := c.secretForProject(projectID)
-	if !ok {
-		return "", publicError("ACTION_PROJECT_UNKNOWN")
-	}
-	return secret, nil
-}
-
 // The API plane is opt-in, but a HALF-wired one is a boot mistake rather than a
 // first-call surprise in a background job.
 func (c *Config) validateAPI() error {
