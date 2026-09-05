@@ -2,6 +2,7 @@ package embassy
 
 import (
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -63,7 +64,7 @@ func validateParams(rawParams, rawSchema any) (map[string]any, error) {
 		}
 	}
 	for name := range specs {
-		if isReservedTenantParam(name) && !contains(reserved, name) {
+		if isReservedTenantParam(name) && !slices.Contains(reserved, name) {
 			reserved = append(reserved, name)
 		}
 	}
@@ -176,8 +177,10 @@ func checkType(name string, value any, typeName string) (any, error) {
 	return nil, schemaViolation("param %s: expected %s, got %s", name, typeName, jsonKind(value))
 }
 
+// Generic decoding runs with UseNumber, so a param or schema value is only ever
+// one of these six shapes.
 func jsonKind(value any) string {
-	switch v := value.(type) {
+	switch value.(type) {
 	case nil:
 		return "null"
 	case string:
@@ -190,17 +193,6 @@ func jsonKind(value any) string {
 		return "array"
 	case map[string]any:
 		return "object"
-	default:
-		_ = v
-		return "unknown"
 	}
-}
-
-func contains(list []string, value string) bool {
-	for _, v := range list {
-		if v == value {
-			return true
-		}
-	}
-	return false
+	return "unknown"
 }

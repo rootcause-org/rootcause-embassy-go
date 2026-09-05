@@ -32,10 +32,44 @@ func Run(a emb.ActionAPI, params map[string]any) (any, error) {
 }
 `
 
+// Params are DATA: a value that looks like code is an inert string.
+const echoNameScript = `package action
+import emb "github.com/rootcause-org/rootcause-embassy-go"
+func Run(a emb.ActionAPI, params map[string]any) (any, error) { return params["name"], nil }
+`
+
 func TestExecutorRunsAndCaptures(t *testing.T) {
-	result := runScript(t, newTestExecutor(t, nil), echoScript, map[string]any{"email": "x@acme.com"})
-	if !result.ok || result.returnValue != "x@acme.com" || result.stdout != "hello" {
-		t.Fatalf("result = %+v", result)
+	codeLike := `"; os.Exit(1); "`
+
+	tests := []struct {
+		name       string
+		script     string
+		params     map[string]any
+		want       any
+		wantStdout string
+	}{
+		{
+			name:       "returns a param and captures stdout",
+			script:     echoScript,
+			params:     map[string]any{"email": "x@acme.com"},
+			want:       "x@acme.com",
+			wantStdout: "hello",
+		},
+		{
+			name:   "a param that looks like code stays an inert string",
+			script: echoNameScript,
+			params: map[string]any{"name": codeLike},
+			want:   codeLike,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := runScript(t, newTestExecutor(t, nil), test.script, test.params)
+			if !result.ok || result.returnValue != test.want || result.stdout != test.wantStdout {
+				t.Fatalf("result = %+v", result)
+			}
+		})
 	}
 }
 
@@ -160,19 +194,6 @@ func Run(a emb.ActionAPI, params map[string]any) (any, error) {
 	// The next run gets a clean program and its own result.
 	if result := runScript(t, exec, slow, nil); !result.ok || result.returnValue != "done" {
 		t.Fatalf("next run = %+v", result)
-	}
-}
-
-// Params are DATA: a value that looks like code is an inert string.
-func TestExecutorParamsAreData(t *testing.T) {
-	const echo = `package action
-import emb "github.com/rootcause-org/rootcause-embassy-go"
-func Run(a emb.ActionAPI, params map[string]any) (any, error) { return params["name"], nil }
-`
-	payload := `"; os.Exit(1); "`
-	result := runScript(t, newTestExecutor(t, nil), echo, map[string]any{"name": payload})
-	if !result.ok || result.returnValue != payload {
-		t.Fatalf("result = %+v", result)
 	}
 }
 

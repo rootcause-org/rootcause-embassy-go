@@ -66,7 +66,7 @@ func checkFreshness(issuedAt string, skew time.Duration, now time.Time) error {
 		drift = -drift
 	}
 	if drift > skew {
-		return replayRefusal("issued_at outside ±%ds window (skew=%ds)", int(skew.Seconds()), int(drift.Seconds()))
+		return replayRefusal("issued_at outside ±%ds window (drift=%ds)", int(skew.Seconds()), int(drift.Seconds()))
 	}
 	return nil
 }
