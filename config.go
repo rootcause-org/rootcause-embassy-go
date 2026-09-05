@@ -227,15 +227,15 @@ func (c *Config) validateTenantlessActions() error {
 		return nil
 	}
 	if !c.RequireTenantContext {
-		return publicError("ACTION_TENANTLESS_ACTIONS_INVALID", "Set RequireTenantContext when configuring TenantlessActions, or leave the allowlist empty.")
+		return publicError("ACTION_TENANTLESS_ACTIONS_INVALID")
 	}
 	seen := make(map[string]struct{}, len(c.TenantlessActions))
 	for _, actionID := range c.TenantlessActions {
 		if strings.TrimSpace(actionID) == "" {
-			return publicError("ACTION_TENANTLESS_ACTIONS_INVALID", "Set TenantlessActions to unique, non-blank action ids, or leave it empty.")
+			return publicError("ACTION_TENANTLESS_ACTIONS_INVALID")
 		}
 		if _, exists := seen[actionID]; exists {
-			return publicError("ACTION_TENANTLESS_ACTIONS_INVALID", "Remove the duplicate action id from TenantlessActions.")
+			return publicError("ACTION_TENANTLESS_ACTIONS_INVALID")
 		}
 		seen[actionID] = struct{}{}
 	}

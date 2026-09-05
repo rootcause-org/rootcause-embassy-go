@@ -20,15 +20,16 @@ var hints = map[string]string{
 	"INTERNAL_ERROR":   "Upgrade the Embassy and rerun the conformance suite, then escalate with a redacted doctor bundle.",
 
 	// Action plane configuration.
-	"ACTION_FETCH_URL_REQUIRED": "Set ROOTCAUSE_FETCH_URL to the absolute ReplyPen script endpoint before enabling actions.",
-	"ACTION_TIMEOUT_INVALID":    "Set Timeout to a positive duration shorter than TotalDeadline.",
-	"ACTION_DEADLINE_INVALID":   "Set TotalDeadline greater than Timeout so the Embassy can refuse before the host cutoff.",
-	"ACTION_CLOCK_SKEW_INVALID": "Set ClockSkew to a positive duration.",
-	"ACTION_SECRET_REQUIRED":    "Set ROOTCAUSE_ACTION_SECRET, or Config.Secrets, before enabling the action or analysis plane.",
-	"ACTION_SECRETS_INVALID":    "Configure exactly one of Secret or Secrets, and map every non-nil project UUID once to a non-blank action reverse secret.",
-	"ACTION_PLANE_DISABLED":     "Configure ROOTCAUSE_ACTION_SECRET and ROOTCAUSE_FETCH_URL before mounting or calling the action and analysis planes.",
-	"ACTION_PROJECT_UNKNOWN":    "Set ProjectID to a project UUID present in Config.Secrets.",
-	"ACTION_EXECUTION_FAILED":   "Inspect the action outcome and application logs before deciding whether a retry is safe.",
+	"ACTION_FETCH_URL_REQUIRED":         "Set ROOTCAUSE_FETCH_URL to the absolute ReplyPen script endpoint before enabling actions.",
+	"ACTION_TIMEOUT_INVALID":            "Set Timeout to a positive duration shorter than TotalDeadline.",
+	"ACTION_DEADLINE_INVALID":           "Set TotalDeadline greater than Timeout so the Embassy can refuse before the host cutoff.",
+	"ACTION_CLOCK_SKEW_INVALID":         "Set ClockSkew to a positive duration.",
+	"ACTION_SECRET_REQUIRED":            "Set ROOTCAUSE_ACTION_SECRET, or Config.Secrets, before enabling the action or analysis plane.",
+	"ACTION_SECRETS_INVALID":            "Configure exactly one of Secret or Secrets, and map every non-nil project UUID once to a non-blank action reverse secret.",
+	"ACTION_PLANE_DISABLED":             "Configure ROOTCAUSE_ACTION_SECRET and ROOTCAUSE_FETCH_URL before mounting or calling the action and analysis planes.",
+	"ACTION_TENANTLESS_ACTIONS_INVALID": "Set TenantlessActions to unique, non-blank action ids alongside RequireTenantContext, or leave the allowlist empty.",
+	"ACTION_PROJECT_UNKNOWN":            "Set ProjectID to a project UUID present in Config.Secrets.",
+	"ACTION_EXECUTION_FAILED":           "Inspect the action outcome and application logs before deciding whether a retry is safe.",
 
 	// Analysis and sent-message calls.
 	"ANALYSIS_TRIGGER_URL_REQUIRED": "Set ROOTCAUSE_TRIGGER_URL before starting an analysis.",
