@@ -91,7 +91,7 @@ func (a *API) Do(ctx context.Context, method, path string, body any, params url.
 		return APIResponse{Error: errorCode(err), Retryable: true, Err: typedAPIError(err)}
 	}
 
-	response, raw, err := a.perform(ctx, method, target, bearer, payload)
+	answer, err := a.perform(ctx, method, target, bearer, payload)
 	if err != nil {
 		if errors.Is(err, ErrMisconfigured) {
 			return misconfigured(err)
@@ -101,13 +101,13 @@ func (a *API) Do(ctx context.Context, method, path string, body any, params url.
 
 	// A token we believed live can still be refused (host restart, revocation).
 	// Burn it, re-exchange exactly ONCE, and accept the second answer as final.
-	if response.StatusCode == http.StatusUnauthorized && isExchangeableKey(a.apiKey) {
+	if answer.Status == http.StatusUnauthorized && isExchangeableKey(a.apiKey) {
 		invalidateToken(a.baseURL, a.apiKey)
 		bearer, err = bearerFor(ctx, a.cfg, a.baseURL, a.apiKey)
 		if err != nil {
 			return APIResponse{Error: errorCode(err), Retryable: true, Err: typedAPIError(err)}
 		}
-		response, raw, err = a.perform(ctx, method, target, bearer, payload)
+		answer, err = a.perform(ctx, method, target, bearer, payload)
 		if err != nil {
 			return APIResponse{Error: "API_TRANSPORT_ERROR", Retryable: true, Err: causedError("API_TRANSPORT_ERROR", err).WithDetail("api call")}
 		}
@@ -115,20 +115,20 @@ func (a *API) Do(ctx context.Context, method, path string, body any, params url.
 
 	// Verb, PATH and status only — never the bearer, never the body, never the
 	// query string (it can carry identifiers).
-	a.cfg.logger().Info("rootcause api call", "method", method, "path", target.Path, "status", response.StatusCode)
+	a.cfg.logger().Info("rootcause api call", "method", method, "path", target.Path, "status", answer.Status)
 
-	parsed := parseAPIBody(raw)
-	if response.StatusCode >= 200 && response.StatusCode <= 299 {
-		return APIResponse{OK: true, Status: response.StatusCode, Body: parsed}
+	parsed := parseAPIBody(answer.Body)
+	if answer.Status >= 200 && answer.Status <= 299 {
+		return APIResponse{OK: true, Status: answer.Status, Body: parsed}
 	}
 
 	result := APIResponse{
-		Status:    response.StatusCode,
+		Status:    answer.Status,
 		Body:      parsed,
-		Error:     fmt.Sprintf("http_%d", response.StatusCode),
-		Retryable: retryableStatus(response.StatusCode),
+		Error:     fmt.Sprintf("http_%d", answer.Status),
+		Retryable: retryableStatus(answer.Status),
 	}
-	refusal := hostRefusal(parsed, response.StatusCode)
+	refusal := hostRefusal(parsed, answer.Status)
 	result.Err = refusal
 	if object, ok := parsed.(map[string]any); ok {
 		if fieldErrors, ok := object["field_errors"].(map[string]any); ok {
@@ -148,11 +148,11 @@ func (a *API) Do(ctx context.Context, method, path string, body any, params url.
 	return result
 }
 
-func (a *API) perform(ctx context.Context, method string, target *url.URL, bearer string, payload []byte) (*http.Response, []byte, error) {
+func (a *API) perform(ctx context.Context, method string, target *url.URL, bearer string, payload []byte) (httpResult, error) {
 	switch method {
 	case http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodDelete:
 	default:
-		return nil, nil, causedError("API_METHOD_INVALID", ErrMisconfigured)
+		return httpResult{}, causedError("API_METHOD_INVALID", ErrMisconfigured)
 	}
 
 	var reader io.Reader
@@ -161,7 +161,7 @@ func (a *API) perform(ctx context.Context, method string, target *url.URL, beare
 	}
 	request, err := http.NewRequestWithContext(ctx, method, target.String(), reader)
 	if err != nil {
-		return nil, nil, causedError("API_REQUEST_INVALID", ErrMisconfigured).WithDetail("the request could not be built")
+		return httpResult{}, causedError("API_REQUEST_INVALID", ErrMisconfigured).WithDetail("the request could not be built")
 	}
 	request.Header.Set("Authorization", "Bearer "+bearer)
 	request.Header.Set("Accept", "application/json")
@@ -169,16 +169,7 @@ func (a *API) perform(ctx context.Context, method string, target *url.URL, beare
 		request.Header.Set("Content-Type", "application/json")
 	}
 
-	response, err := a.cfg.HTTPClient.Do(request)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer func() { _ = response.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 32<<20))
-	if err != nil {
-		return nil, nil, err
-	}
-	return response, raw, nil
+	return doHTTP(a.cfg.HTTPClient, request, apiReadLimit)
 }
 
 // buildURL joins path onto the configured origin. An absolute URL is accepted ONLY

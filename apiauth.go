@@ -3,7 +3,7 @@ package embassy
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -108,18 +108,16 @@ func exchangeRefreshToken(ctx context.Context, cfg *Config, baseURL, refreshToke
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	response, err := cfg.HTTPClient.Do(request)
+	answer, err := doHTTP(cfg.HTTPClient, request, tokenReadLimit)
 	if err != nil {
+		if errors.Is(err, errHTTPRead) {
+			return "", 0, causedError("TOKEN_EXCHANGE_FAILED", err).WithDetail("the token response could not be read")
+		}
 		return "", 0, causedError("API_TRANSPORT_ERROR", err).WithDetail("oauth token exchange")
 	}
-	defer func() { _ = response.Body.Close() }()
-
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return "", 0, causedError("TOKEN_EXCHANGE_FAILED", err).WithDetail("the token response could not be read")
-	}
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return "", 0, hostRefusal(parseAPIBody(raw), response.StatusCode)
+	raw := answer.Body
+	if answer.Status < 200 || answer.Status > 299 {
+		return "", 0, hostRefusal(parseAPIBody(raw), answer.Status)
 	}
 	var payload tokenResponse
 	if err := json.Unmarshal(raw, &payload); err != nil {

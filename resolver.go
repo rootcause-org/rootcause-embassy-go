@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"io"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -181,25 +181,23 @@ func (r *resolver) fetch(ctx context.Context, actionID, digest, projectID string
 	}
 	request.Header.Set(SignatureHeader, Sign([]byte(query), secret))
 
-	response, err := r.cfg.HTTPClient.Do(request)
+	answer, err := doHTTP(r.cfg.HTTPClient, request, scriptReadLimit)
 	if err != nil {
-		// Transport / TLS / timeout all collapse to a fail-closed refusal: the run
-		// never proceeds without a verified body.
+		// Transport / TLS / timeout / an unreadable body all collapse to a
+		// fail-closed refusal: the run never proceeds without a verified body.
+		if errors.Is(err, errHTTPRead) {
+			return "", resolveFailed("script fetch response could not be read")
+		}
 		return "", resolveFailed("script fetch failed")
 	}
-	defer func() { _ = response.Body.Close() }()
-
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
-	if err != nil {
-		return "", resolveFailed("script fetch response could not be read")
-	}
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return "", resolveFailed("script fetch returned %d", response.StatusCode)
+	raw := answer.Body
+	if answer.Status < 200 || answer.Status > 299 {
+		return "", resolveFailed("script fetch returned %d", answer.Status)
 	}
 	// The script's integrity rests on the digest, but the channel is signed both
 	// ways: an unsigned or mis-signed response is a hard refuse, so a misconfigured
 	// host fails closed instead of feeding us an attacker's body.
-	if !VerifySignature(response.Header.Get(SignatureHeader), raw, secret) {
+	if !VerifySignature(answer.Header.Get(SignatureHeader), raw, secret) {
 		return "", resolveFailed("script fetch response signature invalid")
 	}
 

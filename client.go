@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"io"
+	"errors"
 	"net/http"
 	"time"
 )
@@ -271,18 +271,16 @@ func (e *Embassy) postSigned(ctx context.Context, url string, raw []byte, label,
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(SignatureHeader, Sign(raw, secret))
 
-	response, err := e.cfg.HTTPClient.Do(request)
+	answer, err := doHTTP(e.cfg.HTTPClient, request, signedPostReadLimit)
 	if err != nil {
+		if errors.Is(err, errHTTPRead) {
+			return nil, causedError("API_RESPONSE_INVALID", err).WithDetail(label)
+		}
 		return nil, causedError("API_TRANSPORT_ERROR", err).WithDetail(label)
 	}
-	defer func() { _ = response.Body.Close() }()
-
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return nil, causedError("API_RESPONSE_INVALID", err).WithDetail(label)
-	}
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, hostRefusal(parseAPIBody(body), response.StatusCode)
+	body := answer.Body
+	if answer.Status < 200 || answer.Status > 299 {
+		return nil, hostRefusal(parseAPIBody(body), answer.Status)
 	}
 	return body, nil
 }
