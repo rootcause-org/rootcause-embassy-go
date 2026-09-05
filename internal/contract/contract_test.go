@@ -350,6 +350,83 @@ func TestActionRoundTrip(t *testing.T) {
 	if host.lastSignature != embassy.Sign(host.lastBody, reverseSecret) {
 		t.Fatal("script fetch was not signed over the raw query string")
 	}
+
+	// Same envelope key order as the golden; return_value contents differ because
+	// the golden's script is Ruby.
+	assertKeyOrder(t, recorder.Body.Bytes(), fixture(t, "actions/result_ok.json"))
+}
+
+// An omitted `runtime` is accepted — only a runtime we do not implement refuses.
+func TestOmittedRuntimeIsAccepted(t *testing.T) {
+	host := newFakeHost(t, goScript)
+	emb := newEmbassy(t, host, nil)
+	body := invocationBody(t, host, map[string]any{"runtime": nil})
+
+	recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
+	assertSigned(t, recorder)
+	if recorder.Code != 200 {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body)
+	}
+}
+
+// Strict tenant context may exempt named actions, never a whole project.
+func TestTenantContextPolicy(t *testing.T) {
+	const flatAction = "staff_flat_action"
+	strict := func(cfg *embassy.Config) {
+		cfg.RequireTenantContext = true
+		cfg.TenantlessActions = []string{flatAction}
+	}
+	tuple := map[string]any{
+		"tenant_id":   "22222222-2222-2222-2222-222222222222",
+		"tenant_slug": "acme",
+	}
+
+	tests := []struct {
+		name       string
+		overrides  map[string]any
+		wantStatus int
+	}{
+		{
+			name:       "an absent tuple is accepted for an allowlisted action",
+			overrides:  map[string]any{"action_id": flatAction},
+			wantStatus: 200,
+		},
+		{
+			name:       "a non-allowlisted flat invocation still refuses",
+			overrides:  map[string]any{"action_id": "devise_send_password_reset"},
+			wantStatus: 400,
+		},
+		{
+			name:       "a partial tuple refuses even for an allowlisted action",
+			overrides:  map[string]any{"action_id": flatAction, "tenant_id": tuple["tenant_id"]},
+			wantStatus: 400,
+		},
+		{
+			name:       "a complete tuple on an allowlisted action follows the normal path",
+			overrides:  map[string]any{"action_id": flatAction, "tenant_id": tuple["tenant_id"], "tenant_slug": tuple["tenant_slug"]},
+			wantStatus: 200,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			host := newFakeHost(t, goScript)
+			emb := newEmbassy(t, host, strict)
+			body := invocationBody(t, host, test.overrides)
+
+			recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
+			assertSigned(t, recorder)
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d (body %s)", recorder.Code, test.wantStatus, recorder.Body)
+			}
+			if test.wantStatus == 400 {
+				assertClass(t, recorder, 400, embassy.ClassInvalidRequest)
+				if host.lastPath != "" {
+					t.Fatal("a tenant refusal must land before script resolution")
+				}
+			}
+		})
+	}
 }
 
 func TestTenantTupleReachesTheScript(t *testing.T) {
@@ -440,16 +517,6 @@ func TestDryRunMatchesGolden(t *testing.T) {
 	if host.lastPath != "/actions/script" {
 		t.Fatal("dry run skipped the signed script fetch — it must exercise it")
 	}
-}
-
-func TestSuccessEnvelopeShape(t *testing.T) {
-	host := newFakeHost(t, goScript)
-	emb := newEmbassy(t, host, nil)
-	body := invocationBody(t, host, nil)
-	recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
-	// Same envelope key order as the golden; return_value contents differ because
-	// the golden's script is Ruby.
-	assertKeyOrder(t, recorder.Body.Bytes(), fixture(t, "actions/result_ok.json"))
 }
 
 // assertEnvelopeShape compares bytes with the volatile duration_ms normalized.
@@ -788,6 +855,10 @@ func TestResultCallbackDecode(t *testing.T) {
 	if len(got.Actions) != 1 || got.Actions[0].Slug != "devise_send_password_reset" || got.Actions[0].URL == "" {
 		t.Fatalf("actions = %+v", got.Actions)
 	}
+	// A proposal may carry a render-only resource_url; an OUTCOME never does.
+	if got.Actions[0].ResourceURL != "https://admin.acme.com/users/9f21c4/password" {
+		t.Fatalf("resource_url = %q", got.Actions[0].ResourceURL)
+	}
 	if len(got.ExecutedActions) != 1 || !got.ExecutedActions[0].OK || got.ExecutedActions[0].Slug != "recompute_record_formulas" {
 		t.Fatalf("executed_actions = %+v", got.ExecutedActions)
 	}
@@ -799,6 +870,36 @@ func TestResultCallbackDecode(t *testing.T) {
 	}
 	if got.Metadata["resource_id"] != "42" || !got.OK() {
 		t.Fatalf("metadata = %+v ok = %v", got.Metadata, got.OK())
+	}
+}
+
+// A resource_url that is not http(s) is dropped silently: the analysis result is
+// the valuable payload and a bad decoration must not cost the reviewer the draft.
+func TestNonHTTPResourceURLIsDropped(t *testing.T) {
+	host := newFakeHost(t, goScript)
+	var got embassy.Result
+	emb := newEmbassy(t, host, func(cfg *embassy.Config) {
+		cfg.ResultHandler = func(result embassy.Result) error {
+			got = result
+			return nil
+		}
+	})
+
+	body := []byte(`{"analysis_id":"33333333-3333-3333-3333-333333333333","project_id":"` + projectID +
+		`","actions":[{"id":"55555555-5555-5555-5555-555555555555","slug":"devise_send_password_reset",` +
+		`"url":"https://app.replypen.com/a/confirm/eyJ0","resource_url":"javascript:alert(1)"}],` +
+		`"nonce":"contract-nonce-resource-url","issued_at":"` + referenceClock.Format(time.RFC3339) + `"}`)
+
+	recorder := postResult(t, emb, body, embassy.Sign(body, reverseSecret))
+	assertSigned(t, recorder)
+	if recorder.Code != 200 {
+		t.Fatalf("status = %d body %s", recorder.Code, recorder.Body)
+	}
+	if len(got.Actions) != 1 || got.Actions[0].ResourceURL != "" {
+		t.Fatalf("actions = %+v, want the resource_url dropped", got.Actions)
+	}
+	if got.Actions[0].URL == "" {
+		t.Fatal("dropping the decoration must not drop the confirm URL")
 	}
 }
 
@@ -853,6 +954,42 @@ func TestResultRedeliverySemantics(t *testing.T) {
 		if first.Code != 500 {
 			t.Fatalf("failed dispatch = %d %s", first.Code, first.Body)
 		}
+		second := postResult(t, emb, body, signature)
+		assertSigned(t, second)
+		if second.Code != 200 || dispatches != 2 {
+			t.Fatalf("redelivery = %d, dispatches = %d — the nonce was not released", second.Code, dispatches)
+		}
+	})
+
+	t.Run("a panicking handler is a signed 500 that names only the type", func(t *testing.T) {
+		host := newFakeHost(t, goScript)
+		dispatches := 0
+		emb := newEmbassy(t, host, func(cfg *embassy.Config) {
+			cfg.ResultHandler = func(embassy.Result) error {
+				dispatches++
+				if dispatches == 1 {
+					panic("connection string sk-live-secret is bad")
+				}
+				return nil
+			}
+		})
+
+		first := postResult(t, emb, body, signature)
+		assertSigned(t, first)
+		assertClass(t, first, 500, embassy.ClassInternalError)
+		var refusal struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(first.Body.Bytes(), &refusal); err != nil {
+			t.Fatal(err)
+		}
+		if refusal.Error.Message != "embassy.panicError" {
+			t.Fatalf("internal_error must carry the type name only, got %q", refusal.Error.Message)
+		}
+		// A panic is a failed dispatch like any other: the nonce is released so the
+		// host's redelivery is really processed.
 		second := postResult(t, emb, body, signature)
 		assertSigned(t, second)
 		if second.Code != 200 || dispatches != 2 {

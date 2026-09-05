@@ -6,7 +6,8 @@ package embassy
 // The human-in-the-loop invariant lives in the field split:
 //   - Draft / Note / Notes / Attachments / Questions are informational.
 //   - Actions are PROPOSALS. Render each as a button pointing at its single-use
-//     confirm URL. An Embassy NEVER auto-executes one.
+//     confirm URL. An Embassy NEVER auto-executes one. Action.ResourceURL, when
+//     present, is a render-only link beside that button — never a confirm target.
 //   - ExecutedActions already ran host-side mid-loop. Render them as OUTCOMES,
 //     never as confirm buttons.
 type Result struct {
@@ -55,6 +56,13 @@ type Action struct {
 	Label       string `json:"label"`
 	Description string `json:"description"`
 	URL         string `json:"url"`
+	// ResourceURL is an optional absolute http(s) link into the integrator's own
+	// admin UI for the record this action would modify. It exists so a reviewer can
+	// SEE the record before confirming; it is host-resolved, render-only, and must
+	// never be wired to a confirm, a POST or an auto-execute. A value that is not
+	// http(s) is dropped rather than refused — a bad decoration must not cost the
+	// reviewer the draft.
+	ResourceURL string `json:"resource_url"`
 	Color       string `json:"color"`
 }
 
@@ -134,7 +142,7 @@ func (p resultPayload) toResult() Result {
 		ProjectID:       p.ProjectID,
 		SessionID:       p.SessionID,
 		Metadata:        p.Metadata,
-		Actions:         p.Actions,
+		Actions:         sanitizeActions(p.Actions),
 		ExecutedActions: p.Executed,
 		Questions:       p.Questions,
 		DeleteIDs:       p.Delete,
@@ -160,6 +168,18 @@ func (p resultPayload) toResult() Result {
 		result.Note = flattenBody(summary.BodyMarkdown, summary.BodyHTML, summary.BodyText)
 	}
 	return result
+}
+
+// sanitizeActions drops a resource_url that is not an absolute http(s) URL,
+// silently: the analysis result is the valuable payload and a bad decoration must
+// not cost the reviewer the draft.
+func sanitizeActions(actions []Action) []Action {
+	for i := range actions {
+		if actions[i].ResourceURL != "" && !isAbsoluteHTTPURL(actions[i].ResourceURL) {
+			actions[i].ResourceURL = ""
+		}
+	}
+	return actions
 }
 
 // summaryNote picks the ONE human-facing note. An explicit `summary` key always

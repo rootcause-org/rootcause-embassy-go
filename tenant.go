@@ -2,6 +2,7 @@ package embassy
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -29,7 +30,11 @@ var tenantFields = []string{"tenant_id", "tenant_slug", "tenant_scope_value"}
 // not on emptiness: a flat project omits all three fields (preserving its
 // pre-tenant signed bytes), a tenant-bound invocation carries a non-empty
 // tenant_id AND tenant_slug. Any partial tuple is a refusal.
-func validateTenantContext(raw map[string]any, requireTenant bool) (*TenantContext, error) {
+//
+// tenantlessActions narrows strict enforcement per SIGNED action id, never per
+// project: an absent tuple is accepted under requireTenant only for an
+// allowlisted action, and a partial tuple still refuses for one.
+func validateTenantContext(raw map[string]any, requireTenant bool, actionID string, tenantlessActions []string) (*TenantContext, error) {
 	var provided []string
 	for _, field := range tenantFields {
 		if _, present := raw[field]; present {
@@ -37,7 +42,7 @@ func validateTenantContext(raw map[string]any, requireTenant bool) (*TenantConte
 		}
 	}
 	if len(provided) == 0 {
-		if requireTenant {
+		if requireTenant && !slices.Contains(tenantlessActions, actionID) {
 			return nil, invalidRequest("tenant context is required for this Embassy deployment")
 		}
 		return nil, nil

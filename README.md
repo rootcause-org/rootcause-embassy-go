@@ -104,6 +104,12 @@ fix hint and docs link. Both action lines are needed because Go's `ServeMux` mat
 In map mode, use `Secrets` instead of `Secret`; action/result requests select a configured project
 UUID and health signs its raw `?project_id=<uuid>` query.
 
+Set `RequireTenantContext: true` to refuse a signed invocation that carries no tenant tuple, before
+script resolution. A deployment that also serves a genuinely flat project may exempt selected action
+ids with `TenantlessActions` (env `ROOTCAUSE_TENANTLESS_ACTIONS`, comma-separated): a listed id is
+accepted with no tuple at all, a partial tuple still refuses, and every unlisted action stays strict.
+Ids used this way must be globally unique across the projects sharing the reverse secret.
+
 ## Writing an action script
 
 An action script is ordinary Go source that rootcause stores in your project's brain and pins by

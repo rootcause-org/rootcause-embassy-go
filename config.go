@@ -94,6 +94,14 @@ type Config struct {
 	// tenant tuple, before script resolution. Tenant-enabled deployments set it.
 	RequireTenantContext bool
 
+	// TenantlessActions narrows strict tenant enforcement per SIGNED action id, for
+	// a deployment that also serves a genuinely flat project through the same
+	// Embassy. A listed action is accepted with no tenant tuple at all; a partial
+	// tuple still refuses, and every unlisted action stays strict. Ids used this way
+	// must be globally unique across the projects sharing the reverse secret.
+	// Env: ROOTCAUSE_TENANTLESS_ACTIONS (comma-separated).
+	TenantlessActions []string
+
 	// CacheDir persists digest-keyed script bodies across restarts. Empty (the
 	// default) keeps the cache in memory only. The cache is self-verifying: every
 	// disk read is re-hashed before it is trusted.
@@ -139,6 +147,9 @@ func (c *Config) applyDefaults() {
 	c.ChatSecret = orEnv(c.ChatSecret, "ROOTCAUSE_CHAT_SECRET")
 	c.ChatProject = orEnv(c.ChatProject, "ROOTCAUSE_CHAT_PROJECT")
 	c.ChatBaseURL = orEnv(c.ChatBaseURL, "ROOTCAUSE_CHAT_BASE_URL")
+	if len(c.TenantlessActions) == 0 {
+		c.TenantlessActions = splitEnvList("ROOTCAUSE_TENANTLESS_ACTIONS")
+	}
 
 	if c.FetchURL == "" {
 		c.FetchURL = placeholderFetchURL
@@ -205,12 +216,36 @@ func (c *Config) validateAction() error {
 	if c.ClockSkew <= 0 {
 		return publicError("ACTION_CLOCK_SKEW_INVALID", "Set ClockSkew to a positive duration.")
 	}
+	return c.validateTenantlessActions()
+}
+
+// The allowlist is an exception to strict enforcement, so it is meaningless —
+// and misleading to read — without it. Blank or duplicated ids are a deployment
+// typo: refuse at boot rather than silently widen or narrow the exception.
+func (c *Config) validateTenantlessActions() error {
+	if len(c.TenantlessActions) == 0 {
+		return nil
+	}
+	if !c.RequireTenantContext {
+		return publicError("ACTION_TENANTLESS_ACTIONS_INVALID", "Set RequireTenantContext when configuring TenantlessActions, or leave the allowlist empty.")
+	}
+	seen := make(map[string]struct{}, len(c.TenantlessActions))
+	for _, actionID := range c.TenantlessActions {
+		if strings.TrimSpace(actionID) == "" {
+			return publicError("ACTION_TENANTLESS_ACTIONS_INVALID", "Set TenantlessActions to unique, non-blank action ids, or leave it empty.")
+		}
+		if _, exists := seen[actionID]; exists {
+			return publicError("ACTION_TENANTLESS_ACTIONS_INVALID", "Remove the duplicate action id from TenantlessActions.")
+		}
+		seen[actionID] = struct{}{}
+	}
 	return nil
 }
 
 func (c *Config) actionPlaneRequested() bool {
 	return c.actionEnabled() || c.FetchURL != placeholderFetchURL || c.TriggerURL != "" ||
-		c.SentMessageURL != "" || c.ResultHandler != nil || c.RequireTenantContext || c.CacheDir != "" || len(c.Symbols) > 0
+		c.SentMessageURL != "" || c.ResultHandler != nil || c.RequireTenantContext || len(c.TenantlessActions) > 0 ||
+		c.CacheDir != "" || len(c.Symbols) > 0
 }
 
 func (c *Config) actionEnabled() bool {
@@ -347,6 +382,20 @@ func isAbsoluteHTTPURL(raw string) bool {
 		return false
 	}
 	return (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
+}
+
+// splitEnvList reads a comma-separated env list, trimming each entry. A blank
+// entry is kept so validation refuses the typo instead of quietly dropping it.
+func splitEnvList(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
 }
 
 func orEnv(value, key string) string {

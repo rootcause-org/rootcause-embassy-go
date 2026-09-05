@@ -142,3 +142,72 @@ func TestConfigEnvFallback(t *testing.T) {
 		t.Fatalf("explicit config lost to the environment: %v", err)
 	}
 }
+
+func TestTenantlessActionsKnob(t *testing.T) {
+	valid := func() Config {
+		return Config{
+			Secret:               "s3cret",
+			FetchURL:             "https://app.replypen.com/actions/script",
+			RequireTenantContext: true,
+			TenantlessActions:    []string{"staff_flat_action"},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		mutate   func(*Config)
+		wantCode string
+	}{
+		{name: "an allowlist under strict tenant context"},
+		{
+			name:     "an allowlist without strict tenant context exempts nothing",
+			mutate:   func(c *Config) { c.RequireTenantContext = false },
+			wantCode: "ACTION_TENANTLESS_ACTIONS_INVALID",
+		},
+		{
+			name:     "a blank action id",
+			mutate:   func(c *Config) { c.TenantlessActions = []string{"staff_flat_action", "  "} },
+			wantCode: "ACTION_TENANTLESS_ACTIONS_INVALID",
+		},
+		{
+			name:     "a duplicated action id",
+			mutate:   func(c *Config) { c.TenantlessActions = []string{"staff_flat_action", "staff_flat_action"} },
+			wantCode: "ACTION_TENANTLESS_ACTIONS_INVALID",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := valid()
+			if test.mutate != nil {
+				test.mutate(&cfg)
+			}
+			_, err := New(cfg)
+			if test.wantCode == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			var typed *Error
+			if !errors.As(err, &typed) || typed.Code() != test.wantCode {
+				t.Fatalf("error = %v, want code %s", err, test.wantCode)
+			}
+		})
+	}
+}
+
+func TestTenantlessActionsEnvFallback(t *testing.T) {
+	t.Setenv("ROOTCAUSE_ACTION_SECRET", "s3cret")
+	t.Setenv("ROOTCAUSE_FETCH_URL", "https://app.replypen.com/actions/script")
+	t.Setenv("ROOTCAUSE_TENANTLESS_ACTIONS", "staff_flat_action, staff_other_action")
+
+	emb, err := New(Config{RequireTenantContext: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := emb.Config().TenantlessActions
+	if len(got) != 2 || got[0] != "staff_flat_action" || got[1] != "staff_other_action" {
+		t.Fatalf("tenantless actions = %#v", got)
+	}
+}

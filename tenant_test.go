@@ -12,6 +12,7 @@ func TestValidateTenantContext(t *testing.T) {
 		name          string
 		body          string
 		requireTenant bool
+		tenantless    []string
 		wantSlug      string
 		wantErr       string
 	}{
@@ -24,6 +25,33 @@ func TestValidateTenantContext(t *testing.T) {
 			body:          `{"action_id":"a"}`,
 			requireTenant: true,
 			wantErr:       "tenant context is required",
+		},
+		{
+			name:          "an allowlisted action id exempts an absent tuple",
+			body:          `{"action_id":"staff_flat_action"}`,
+			requireTenant: true,
+			tenantless:    []string{"staff_flat_action"},
+		},
+		{
+			name:          "a non-allowlisted action id stays strict",
+			body:          `{"action_id":"other_action"}`,
+			requireTenant: true,
+			tenantless:    []string{"staff_flat_action"},
+			wantErr:       "tenant context is required",
+		},
+		{
+			name:          "an allowlisted action id still refuses a partial tuple",
+			body:          `{"action_id":"staff_flat_action","tenant_id":"` + validID + `"}`,
+			requireTenant: true,
+			tenantless:    []string{"staff_flat_action"},
+			wantErr:       "tenant_slug missing",
+		},
+		{
+			name:          "an allowlisted action id keeps a complete tuple bound",
+			body:          `{"action_id":"staff_flat_action","tenant_id":"` + validID + `","tenant_slug":"acme"}`,
+			requireTenant: true,
+			tenantless:    []string{"staff_flat_action"},
+			wantSlug:      "acme",
 		},
 		{
 			name:     "full tuple",
@@ -83,7 +111,7 @@ func TestValidateTenantContext(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			tenant, err := validateTenantContext(raw, test.requireTenant)
+			tenant, err := validateTenantContext(raw, test.requireTenant, stringField(raw, "action_id"), test.tenantless)
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("error = %v, want %q", err, test.wantErr)

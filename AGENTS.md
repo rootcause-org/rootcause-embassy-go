@@ -23,7 +23,7 @@ rules an agent changing it must follow.
 | `signature.go` | HMAC-SHA256, `X-Webhook-Signature`, constant-time verify, blank-key floor |
 | `replay.go` | freshness window, `NonceStore` + the default in-memory store |
 | `schema.go` | map-form param re-validation, reserved tenant/principal names, type normalization |
-| `tenant.go` / `principal.go` | trusted host scope: tenant tuple and optional typed principal validation |
+| `tenant.go` / `principal.go` | trusted host scope: tenant tuple (incl. the `TenantlessActions` exemption) and optional typed principal validation |
 | `resolver.go` | script by digest: memory → disk → signed GET, re-hash everywhere |
 | `executor.go` | yaegi: typed `ActionAPI` scope, bridge/trampoline, scope-isolated program pool, stdout cap |
 | `action.go` | the invocation route: verify → parse → tenant → replay → schema → resolve → run |

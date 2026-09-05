@@ -161,7 +161,7 @@ func (e *Embassy) invoke(ctx context.Context, raw []byte, signature string, star
 	if err != nil {
 		return resultEnvelope{}, asError(err)
 	}
-	tenant, err := validateTenantContext(invocation.raw, e.cfg.RequireTenantContext)
+	tenant, err := validateTenantContext(invocation.raw, e.cfg.RequireTenantContext, invocation.ActionID, e.cfg.TenantlessActions)
 	if err != nil {
 		return resultEnvelope{}, asError(err)
 	}
