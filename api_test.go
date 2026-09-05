@@ -152,40 +152,101 @@ func TestAPIOutcomesAreValues(t *testing.T) {
 func TestAPIMisconfigurationDoesNotHide(t *testing.T) {
 	emb := apiEmbassy(t, "https://app.replypen.com", "rcoa_static")
 
-	response := emb.API().Get(context.Background(), "https://evil.example.com/steal", nil)
-	if response.Err == nil || response.OK {
-		t.Fatalf("an off-origin path must not carry the bearer: %+v", response)
-	}
-	if response := emb.API().Get(context.Background(), "", nil); response.Err == nil {
-		t.Fatal("a blank path must surface as a caller bug")
+	// A bad argument raises instead of hiding in an outcome, and never carries the
+	// bearer somewhere it was not meant to go.
+	for _, test := range []struct {
+		name string
+		path string
+		code string
+	}{
+		{name: "another origin", path: "https://evil.example.com/steal", code: "API_ORIGIN_MISMATCH"},
+		{name: "malformed absolute port", path: "https://app.replypen.com:notaport/api/v1/me", code: "API_PATH_INVALID"},
+		{name: "blank path", path: "", code: "API_PATH_REQUIRED"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := emb.API().Get(context.Background(), test.path, nil)
+			var typed *Error
+			if response.OK || !errors.As(response.Err, &typed) || typed.Code() != test.code {
+				t.Fatalf("response = %+v err = %#v", response, typed)
+			}
+			if !errors.Is(response.Err, ErrMisconfigured) {
+				t.Fatalf("a caller bug must be distinguishable from a call outcome: %#v", response.Err)
+			}
+		})
 	}
 }
 
-func TestAPIRefusalPreservesHostCode(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"error":{"code":"CHAT_DISABLED","hint":"Enable chat for this project.","docs":"https://example.test/chat-disabled"}}`))
+// A base URL may carry a path prefix (the host mounted behind a gateway), so the
+// prefix has to survive the join with both spellings of the path.
+func TestAPIBaseURLPathPrefixJoins(t *testing.T) {
+	var seen string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.URL.RequestURI()
+		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
 
-	response := apiEmbassy(t, server.URL, "rcoa_static").API().Get(context.Background(), "/api/v1/chat", nil)
-	var typed *Error
-	if !errors.As(response.Err, &typed) || response.Error != "CHAT_DISABLED" || typed.Code() != "CHAT_DISABLED" ||
-		typed.Hint != "Enable chat for this project." || typed.Docs != "https://example.test/chat-disabled" {
-		t.Fatalf("response = %+v err = %#v", response, typed)
+	api := apiEmbassy(t, server.URL+"/rootcause", "rcoa_static").API()
+	for _, path := range []string{"api/v1/projects", "/api/v1/projects"} {
+		seen = ""
+		if response := api.Get(context.Background(), path, url.Values{"limit": {"10"}}); !response.OK {
+			t.Fatalf("%s: response = %+v", path, response)
+		}
+		if seen != "/rootcause/api/v1/projects?limit=10" {
+			t.Fatalf("%s: request = %q", path, seen)
+		}
 	}
 }
 
-func TestTokenExchangeRefusalPreservesHostCode(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"code":"BAD_TOKEN","hint":"Rotate the API credential.","docs":"https://example.test/bad-token"}`))
-	}))
-	defer server.Close()
+// The host's own code, hint and docs are what a caller branches on, whether the
+// refusal arrives from an API call (nested under "error") or from the token
+// exchange (top level).
+func TestHostRefusalPreservesHostDiagnostics(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		apiKey    string
+		status    int
+		body      string
+		code      string
+		hint      string
+		docs      string
+		retryable bool
+	}{
+		{
+			name:   "api call, nested error object",
+			apiKey: "rcoa_static",
+			status: http.StatusForbidden,
+			body:   `{"error":{"code":"CHAT_DISABLED","hint":"Enable chat for this project.","docs":"https://example.test/chat-disabled"}}`,
+			code:   "CHAT_DISABLED",
+			hint:   "Enable chat for this project.",
+			docs:   "https://example.test/chat-disabled",
+		},
+		{
+			// An auth failure is retryable: the credential is usually fine and the
+			// exchange endpoint was merely unhappy.
+			name:      "token exchange, top-level object",
+			apiKey:    "rcor_refused",
+			status:    http.StatusUnauthorized,
+			body:      `{"code":"BAD_TOKEN","hint":"Rotate the API credential.","docs":"https://example.test/bad-token"}`,
+			code:      "BAD_TOKEN",
+			hint:      "Rotate the API credential.",
+			docs:      "https://example.test/bad-token",
+			retryable: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
 
-	response := apiEmbassy(t, server.URL, "rcor_refused").API().Get(context.Background(), "/api/v1/me", nil)
-	var typed *Error
-	if !errors.As(response.Err, &typed) || typed.Code() != "BAD_TOKEN" || typed.Hint != "Rotate the API credential." {
-		t.Fatalf("response = %+v err = %#v", response, typed)
+			response := apiEmbassy(t, server.URL, test.apiKey).API().Get(context.Background(), "/api/v1/chat", nil)
+			var typed *Error
+			if !errors.As(response.Err, &typed) || response.Error != test.code || typed.Code() != test.code ||
+				typed.Hint != test.hint || typed.Docs != test.docs || response.Retryable != test.retryable {
+				t.Fatalf("response = %+v err = %#v", response, typed)
+			}
+		})
 	}
 }

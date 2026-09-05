@@ -20,6 +20,9 @@ rules an agent changing it must follow.
 |---|---|
 | `embassy.go` | `New`, the facade, `API()` / `APIFor()` |
 | `config.go` | every knob, `ROOTCAUSE_*` env fallbacks, fail-closed boot validation |
+| `secrets.go` | the decision-14 selector: signed `project_id` → reverse secret, for every HMAC direction |
+| `errors.go` | the customer-facing `Error`, the signed refusal classes, the code→hint lookup |
+| `httpx.go` | the one outbound HTTP call, and the four response read caps in one table |
 | `signature.go` | HMAC-SHA256, `X-Webhook-Signature`, constant-time verify, blank-key floor |
 | `replay.go` | freshness window, `NonceStore` + the default in-memory store |
 | `schema.go` | map-form param re-validation, reserved tenant/principal names, type normalization |
@@ -30,8 +33,10 @@ rules an agent changing it must follow.
 | `result.go` | the `Result` value type and the tolerant result decode |
 | `resultroute.go` | the result route, incl. the idempotent-ack + nonce-release rule |
 | `client.go` | `StartAnalysis`, `CaptureSentMessage` (sent replies AND answers) |
-| `api.go` / `apiauth.go` | the generic API plane and the `rcor_` token exchange |
+| `api.go` / `apiauth.go` | the generic API plane, the `rcor_` token exchange, and the per-caller token cache |
 | `chat/` | embed-token minting + the widget tag (a DIFFERENT key: `ChatSecret`) |
+| `internal/rcerr/` | the ONE `Error` definition and the ONE code→hint table, shared with `chat/` |
+| `internal/uuid/` | nonce and `jti` generation, shared with `chat/` |
 | `internal/contract/` | the conformance suite + vendored hub fixtures |
 
 ## Rules
