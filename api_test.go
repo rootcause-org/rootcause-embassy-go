@@ -49,7 +49,6 @@ func TestAPIRefreshTokenExchange(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	}))
 	defer server.Close()
-	invalidateToken(server.URL, "rcor_secret")
 
 	emb := apiEmbassy(t, server.URL, "rcor_secret")
 	response := emb.API().Get(context.Background(), "/api/v1/projects", url.Values{"limit": {"10"}})
@@ -94,7 +93,6 @@ func TestAPIRetriesOnceOn401(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	}))
 	defer server.Close()
-	invalidateToken(server.URL, "rcor_secret")
 
 	emb := apiEmbassy(t, server.URL, "rcor_secret")
 	if response := emb.API().Get(context.Background(), "/api/v1/me", nil); !response.OK {
@@ -184,7 +182,6 @@ func TestTokenExchangeRefusalPreservesHostCode(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":"BAD_TOKEN","hint":"Rotate the API credential.","docs":"https://example.test/bad-token"}`))
 	}))
 	defer server.Close()
-	invalidateToken(server.URL, "rcor_refused")
 
 	response := apiEmbassy(t, server.URL, "rcor_refused").API().Get(context.Background(), "/api/v1/me", nil)
 	var typed *Error

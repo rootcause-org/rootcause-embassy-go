@@ -25,67 +25,47 @@ const (
 	defaultExpiresIn = 3600 * time.Second
 )
 
-type tokenCacheKey struct {
-	baseURL string
-	apiKey  string
-}
+func isExchangeableKey(apiKey string) bool { return strings.HasPrefix(apiKey, refreshPrefix) }
 
-type cachedToken struct {
-	// mu serializes the exchange so concurrent callers do it once (single-flight),
-	// and keeps the per-credential caches independent of one another.
+// apiAuth is ONE caller's access-token cache. The cache key is the API value it
+// belongs to — an API is pinned to a single (base URL, api key) pair — so two
+// callers for two projects can never hand each other a token, and a caller that
+// is garbage-collected takes its token with it.
+type apiAuth struct {
+	// mu serializes the exchange so concurrent callers do it once (single-flight).
 	mu        sync.Mutex
 	token     string
 	expiresAt time.Time
 }
 
-var (
-	tokenCacheMu sync.Mutex
-	tokenCache   = map[tokenCacheKey]*cachedToken{}
-)
-
-func isExchangeableKey(apiKey string) bool { return strings.HasPrefix(apiKey, refreshPrefix) }
-
-func tokenEntry(key tokenCacheKey) *cachedToken {
-	tokenCacheMu.Lock()
-	defer tokenCacheMu.Unlock()
-	entry, ok := tokenCache[key]
-	if !ok {
-		entry = &cachedToken{}
-		tokenCache[key] = entry
-	}
-	return entry
+// invalidate burns the cached token after the host refused it.
+func (a *apiAuth) invalidate() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.token, a.expiresAt = "", time.Time{}
 }
 
-func invalidateToken(baseURL, apiKey string) {
-	entry := tokenEntry(tokenCacheKey{baseURL, apiKey})
-	entry.mu.Lock()
-	entry.token, entry.expiresAt = "", time.Time{}
-	entry.mu.Unlock()
-}
-
-// bearerFor resolves the Authorization value: an `rcor_` refresh token is exchanged
-// for a short-lived access token and cached in-process per (base URL, key);
-// anything else is the bearer itself.
+// bearer resolves the Authorization value: an `rcor_` refresh token is exchanged
+// for a short-lived access token and cached on this caller; anything else is the
+// bearer itself.
 //
 // The deadline rides Go's monotonic clock, so an NTP jump or a suspend cannot make
 // a dead token look live.
-func bearerFor(ctx context.Context, cfg *Config, baseURL, apiKey string) (string, error) {
-	if !isExchangeableKey(apiKey) {
-		return apiKey, nil
+func (a *API) bearer(ctx context.Context) (string, error) {
+	if !isExchangeableKey(a.apiKey) {
+		return a.apiKey, nil
 	}
-	entry := tokenEntry(tokenCacheKey{baseURL, apiKey})
-
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	if entry.token != "" && time.Now().Before(entry.expiresAt.Add(-expirySkew)) {
-		return entry.token, nil
+	a.auth.mu.Lock()
+	defer a.auth.mu.Unlock()
+	if a.auth.token != "" && time.Now().Before(a.auth.expiresAt.Add(-expirySkew)) {
+		return a.auth.token, nil
 	}
 
-	token, expiresIn, err := exchangeRefreshToken(ctx, cfg, baseURL, apiKey)
+	token, expiresIn, err := exchangeRefreshToken(ctx, a.cfg, a.baseURL, a.apiKey)
 	if err != nil {
 		return "", err
 	}
-	entry.token, entry.expiresAt = token, time.Now().Add(expiresIn)
+	a.auth.token, a.auth.expiresAt = token, time.Now().Add(expiresIn)
 	return token, nil
 }
 

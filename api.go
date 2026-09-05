@@ -46,6 +46,7 @@ type API struct {
 	cfg     *Config
 	baseURL string
 	apiKey  string
+	auth    apiAuth
 }
 
 func newAPI(cfg *Config, baseURL, apiKey string) *API {
@@ -84,7 +85,7 @@ func (a *API) Do(ctx context.Context, method, path string, body any, params url.
 		return misconfigured(causedError("API_REQUEST_INVALID", ErrMisconfigured).WithDetail("the request body is not JSON-encodable"))
 	}
 
-	bearer, err := bearerFor(ctx, a.cfg, a.baseURL, a.apiKey)
+	bearer, err := a.bearer(ctx)
 	if err != nil {
 		// Auth failure is retryable: the credential is usually fine and the exchange
 		// endpoint was merely unreachable or unhappy.
@@ -102,8 +103,8 @@ func (a *API) Do(ctx context.Context, method, path string, body any, params url.
 	// A token we believed live can still be refused (host restart, revocation).
 	// Burn it, re-exchange exactly ONCE, and accept the second answer as final.
 	if answer.Status == http.StatusUnauthorized && isExchangeableKey(a.apiKey) {
-		invalidateToken(a.baseURL, a.apiKey)
-		bearer, err = bearerFor(ctx, a.cfg, a.baseURL, a.apiKey)
+		a.auth.invalidate()
+		bearer, err = a.bearer(ctx)
 		if err != nil {
 			return APIResponse{Error: errorCode(err), Retryable: true, Err: typedAPIError(err)}
 		}

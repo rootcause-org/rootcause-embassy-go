@@ -52,6 +52,9 @@ func (e *Embassy) API() *API { return e.api }
 // APIFor builds a caller for ANOTHER project: rootcause refresh tokens are
 // project-pinned, so an app spanning several projects holds one credential each
 // and their token caches never mix.
+//
+// Hold on to the returned caller. Its access-token cache lives on the value, so
+// building a fresh one per call re-exchanges the refresh token every time.
 func (e *Embassy) APIFor(apiBaseURL, apiKey string) *API {
 	return newAPI(e.cfg, apiBaseURL, apiKey)
 }
