@@ -1,0 +1,35 @@
+version: "2"
+
+# Two rules the Embassy's posture depends on, on top of the standard linters:
+#   depguard   — stdlib + yaegi only, so the dependency surface stays auditable.
+#   forbidigo  — nothing writes to a process-global stream: script output is
+#                captured through ActionAPI.Out(), and diagnostics go to the
+#                injected slog logger, never to stdout/stderr.
+# Tests and the examples are exempt: they are not the library's runtime surface.
+linters:
+  enable:
+    - depguard
+    - forbidigo
+  settings:
+    depguard:
+      rules:
+        main:
+          allow:
+            - $gostd
+            - github.com/traefik/yaegi
+            - github.com/rootcause-org/rootcause-embassy-go
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Print.*$
+        - pattern: ^log\.Print.*$
+        - pattern: ^os\.(Stdout|Stderr)$
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - depguard
+          - forbidigo
+      - path: ^examples/
+        linters:
+          - depguard
+          - forbidigo

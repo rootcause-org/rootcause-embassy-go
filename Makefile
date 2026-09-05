@@ -9,14 +9,14 @@ build:
 vet:
 	go vet ./...
 
-# golangci-lint is optional locally: skip gracefully rather than fail a checkout
-# that has not installed it.
+# depguard and forbidigo carry posture rules, not style preferences, so a missing
+# linter is a failed check rather than a silent skip.
 lint:
-	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run; \
-	else \
-		echo "golangci-lint not installed — skipping"; \
-	fi
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "golangci-lint is required: brew install golangci-lint (or see https://golangci-lint.run/welcome/install/)"; \
+		exit 1; \
+	}
+	golangci-lint run
 
 test:
 	go test ./...

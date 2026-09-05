@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # make check runs the linter itself, so install the binary rather than
+      # letting an action run its own pass.
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: make check
+        run: make check
+
+  fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone the contract hub
+        run: git clone https://github.com/rootcause-org/rootcause-embassy hub
+
+      # The vendored copy must be byte-identical to the hub at the SHA it records.
+      - name: Fixture parity
+        run: |
+          set -euo pipefail
+          sha="$(cat internal/contract/testdata/HUB_SHA)"
+          git -C hub checkout --quiet "$sha"
+          diff -r hub/fixtures internal/contract/testdata --exclude HUB_SHA
+
+      # Passing tests do not prove conformance: a fixtures-touching hub commit we
+      # have not vendored is drift, and CI is where it must become visible.
+      - name: Fixture drift
+        run: |
+          set -euo pipefail
+          sha="$(cat internal/contract/testdata/HUB_SHA)"
+          behind="$(git -C hub log --oneline "$sha"..origin/main -- fixtures/)"
+          if [ -n "$behind" ]; then
+            echo "vendored fixtures are behind the hub; re-vendor at origin/main:"
+            echo "$behind"
+            exit 1
+          fi
