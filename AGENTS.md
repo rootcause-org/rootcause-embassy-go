@@ -3,6 +3,20 @@
 The Go Embassy. Customer-facing usage is in [README.md](README.md); this file is the repo map and the
 rules an agent changing it must follow.
 
+## Domain taxonomy
+
+Use the [Rootcause taxonomy](https://github.com/rootcause-org/rootcause/blob/main/AGENTS.md#taxonomy)
+for shared domain terms and the [Embassy contract](https://github.com/rootcause-org/rootcause-embassy/blob/main/CONTRACT.md)
+for wire vocabulary. Go-specific distinctions:
+
+- **`ActionAPI`** ([executor.go](executor.go)) — a script's trusted scope, deadline and captured
+  output; **`API`** ([api.go](api.go)) is the authenticated HTTP caller to Rootcause.
+- **`Principal`** ([client.go](client.go)) — the customer's identity assertion sent with analysis;
+  **`PrincipalContext`** ([principal.go](principal.go)) is the host-resolved identity and typed claims
+  exposed to an action script.
+- **`Result`** ([result.go](result.go)) — an analysis callback, distinct from an action execution's
+  result envelope. Its **`Action`** values are proposals; **`ExecutedAction`** values are outcomes.
+
 ## The contract lives elsewhere
 
 **`~/code/rootcause-org/rootcause-embassy` is the authority** for every wire question: `CONTRACT.md`,
