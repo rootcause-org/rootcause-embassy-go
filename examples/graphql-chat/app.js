@@ -27,7 +27,7 @@
     var chat = await mint();
     var script = document.createElement("script");
     script.async = true;
-    script.src = chat.baseUrl.replace(/\/$/, "") + "/chat/widget/v1/loader.js?v=2";
+    script.src = chat.baseUrl.replace(/\/$/, "") + "/chat/widget/v1/loader.js?v=3";
     script.dataset.rcProject = chat.project;
     script.dataset.rcToken = chat.token;
     script.dataset.rcMode = "page";

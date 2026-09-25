@@ -1,0 +1,1 @@
+{"surfaces":["chat","dashboard_chat","email","intercom","whatsapp","compose","prompt_api","mcp","embassy","console"],"deprecated_aliases":{"gmail":"email","outlook":"email","imap":"email"}}

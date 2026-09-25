@@ -81,6 +81,16 @@
       "note": ""
     },
     {
+      "name": "result_action_error",
+      "file": "actions/result_action_error.json",
+      "direction": "embassy->host",
+      "secret": "contract-reverse-secret",
+      "body_bytes": 329,
+      "body_sha256": "482988a10d5bd67a1e58b452b2b75b434d535c3a87a5b14b9eb77b880bc612f5",
+      "signature": "sha256=29777498704b7049a344184d2594eaed52597804d5f77b7dcfd62d8757ac9616",
+      "note": "HTTP 200; script raised - backtrace is a newline-joined STRING, never an array"
+    },
+    {
       "name": "result_refusal_bad_signature",
       "file": "actions/result_refusal_bad_signature.json",
       "direction": "embassy->host",

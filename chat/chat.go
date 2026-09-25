@@ -45,7 +45,7 @@ const (
 	// loaderRevision is the loader CONTRACT revision. The host immutable-caches that
 	// asset, so bump it whenever a generated attribute starts requiring new loader
 	// behavior — otherwise an already-open browser pairs a new tag with stale JS.
-	loaderRevision = "2"
+	loaderRevision = "3"
 )
 
 // Claims is what the token asserts. Every field is inside the signature, so a

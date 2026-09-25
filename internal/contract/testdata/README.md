@@ -37,6 +37,7 @@ can genuinely exercise the digest-verification path with `fetch_response.json`.
 ```
 signing_vectors.json                    every HMAC vector + the script-fetch query vector
 actions/
+  surfaces.json                         brain-facing posture vocabulary + deprecated aliases (not wire)
   invocation_flat.json                  no tenant tuple, no dry_run (dry_run emitted iff true)
   invocation_tenant.json                full tenant tuple
   invocation_principal.json             tenant tuple + host-stamped principal and typed claims
@@ -46,6 +47,7 @@ actions/
   fetch_response.json                   signed script-by-digest response
   result_ok.json                        success envelope
   result_dry_run.json                   {"dry_run":true,"would_execute":true}
+  result_action_error.json              script raised: signed 200, ok:false, backtrace STRING
   result_refusal_bad_signature.json     401
   result_refusal_replay.json            409
   result_refusal_schema_violation.json  422
@@ -61,7 +63,7 @@ analysis/
   answers.json                          answers-only variant (no sent body)
 chat/
   jwt_vector.json                       secret + claims + iat → the exact token string
-  widget_tag.html                       the loader <script> tag, ?v=2
+  widget_tag.html                       the loader <script> tag, ?v=3
   sse_frames.jsonl                      redacted decoded data frames from one complete SSE turn
 ```
 
