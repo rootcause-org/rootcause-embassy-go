@@ -63,6 +63,7 @@ analysis/
   answers.json                          answers-only variant (no sent body)
 chat/
   jwt_vector.json                       secret + claims + iat → the exact token string
+  jwt_vector_credentials.json           the same with a `credentials` claim (keys sorted)
   widget_tag.html                       the loader <script> tag, ?v=3
   sse_frames.jsonl                      redacted decoded data frames from one complete SSE turn
 ```
@@ -84,7 +85,7 @@ the spine.
    `delete[]`.
 4. **Errors** — assert your status ↔ `class` table against the four refusal fixtures.
 5. **Refusal is signed** — assert every non-2xx you produce also carries a valid signature.
-6. **Chat** — replay `jwt_vector.json` to the **exact** `token` string, and assert `alg` is checked
+6. **Chat** — replay `jwt_vector.json` and `jwt_vector_credentials.json` to the **exact** `token` string, and assert `alg` is checked
    before the signature.
 7. **Replay** — a duplicate nonce is `409` on the action route; on the result route it is a `200` ack
    after a successful dispatch, and a real re-dispatch after a failed one (the nonce is released).

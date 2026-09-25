@@ -1178,6 +1178,37 @@ func TestChatJWTVector(t *testing.T) {
 		t.Fatal("signing input differs from the vector")
 	}
 
+	credentialsVector := struct {
+		NowUnix    int64  `json:"now_unix"`
+		TTLSeconds int64  `json:"ttl_seconds"`
+		Token      string `json:"token"`
+	}{}
+	if err := json.Unmarshal(fixture(t, "chat/jwt_vector_credentials.json"), &credentialsVector); err != nil {
+		t.Fatal(err)
+	}
+	credentialed, err := chat.MintEmbedToken(vector.Secret, chat.Claims{
+		Project:     "acme",
+		ExternalID:  "user-8f3",
+		Kind:        "acme_user",
+		Origin:      "https://app.acme.example",
+		Tenant:      "acme",
+		Locale:      "nl",
+		ColorScheme: "light",
+		Credentials: map[string]string{
+			"ACME_API_BASE":    "https://api.acme.example",
+			"ACME_AGENT_TOKEN": "acme-agent-token-8f3",
+		},
+		JTI:      "99999999-9999-9999-9999-999999999999",
+		TTL:      time.Duration(credentialsVector.TTLSeconds) * time.Second,
+		IssuedAt: time.Unix(credentialsVector.NowUnix, 0).UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentialed != credentialsVector.Token {
+		t.Fatalf("credentials token\n got: %s\nwant: %s", credentialed, credentialsVector.Token)
+	}
+
 	tag, err := chat.WidgetTagHTML(chat.Widget{
 		BaseURL:     "https://app.replypen.com",
 		Project:     "acme",

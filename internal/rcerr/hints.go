@@ -62,6 +62,7 @@ var hints = map[string]string{
 
 	// Chat plane.
 	"CHAT_BASE_URL_INVALID":     "Set the chat base URL to an absolute http or https origin with no path.",
+	"CHAT_CREDENTIALS_INVALID":  "Use at most 8 Claims.Credentials entries (8 KiB total) with keys matching ^[A-Z][A-Z0-9_]{0,63}$ and not starting with RC_.",
 	"CHAT_SECRET_REQUIRED":      "Set ROOTCAUSE_CHAT_SECRET to the project's chat signing secret.",
 	"CHAT_SECRET_REUSED":        "Use a chat signing secret that differs from ROOTCAUSE_ACTION_SECRET and from every Config.Secrets value.",
 	"CHAT_PROJECT_REQUIRED":     "Set the public ReplyPen project slug on ROOTCAUSE_CHAT_PROJECT, Claims.Project, or Widget.Project.",

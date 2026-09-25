@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +110,18 @@ func TestMintRefusals(t *testing.T) {
 		{name: "non-http origin", secret: secret, mutate: func(c *chat.Claims) { c.Origin = "ftp://app.example.com" }, code: "ORIGIN_INVALID"},
 		{name: "negative ttl", secret: secret, mutate: func(c *chat.Claims) { c.TTL = -time.Second }, code: "TOKEN_TTL_INVALID"},
 		{name: "excessive ttl", secret: secret, mutate: func(c *chat.Claims) { c.TTL = chat.MaxTTL + time.Second }, code: "TOKEN_TTL_INVALID"},
+		{name: "lowercase credential key", secret: secret, mutate: func(c *chat.Claims) { c.Credentials = map[string]string{"api_token": "x"} }, code: "CHAT_CREDENTIALS_INVALID"},
+		{name: "host-reserved credential key", secret: secret, mutate: func(c *chat.Claims) { c.Credentials = map[string]string{"RC_TOKEN": "x"} }, code: "CHAT_CREDENTIALS_INVALID"},
+		{name: "credential key over 64 chars", secret: secret, mutate: func(c *chat.Claims) { c.Credentials = map[string]string{"A" + strings.Repeat("B", 64): "x"} }, code: "CHAT_CREDENTIALS_INVALID"},
+		{name: "nine credentials", secret: secret, mutate: func(c *chat.Claims) {
+			c.Credentials = map[string]string{}
+			for i := range 9 {
+				c.Credentials[fmt.Sprintf("KEY_%d", i)] = "x"
+			}
+		}, code: "CHAT_CREDENTIALS_INVALID"},
+		{name: "credentials over 8 KiB", secret: secret, mutate: func(c *chat.Claims) {
+			c.Credentials = map[string]string{"BIG": strings.Repeat("x", chat.MaxCredentialsBytes)}
+		}, code: "CHAT_CREDENTIALS_INVALID"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

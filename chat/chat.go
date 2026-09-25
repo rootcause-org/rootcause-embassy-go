@@ -19,6 +19,7 @@ import (
 	"html"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -48,6 +49,15 @@ const (
 	loaderRevision = "3"
 )
 
+// Credentials limits. The host re-checks every rule and refuses the session open,
+// so refusing here surfaces the mistake at mint instead of in a browser.
+const (
+	MaxCredentials      = 8
+	MaxCredentialsBytes = 8 << 10
+)
+
+var credentialKey = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+
 // Claims is what the token asserts. Every field is inside the signature, so a
 // swapped tenant or origin is a broken token.
 type Claims struct {
@@ -69,6 +79,12 @@ type Claims struct {
 	// Locale and ColorScheme are presentation hints only — they grant nothing.
 	Locale      string
 	ColorScheme string
+	// Credentials are handed to every run of the session as plain env vars (name →
+	// value). Pass a token scoped to exactly this user for your own API: the agent can
+	// read it. Keys match ^[A-Z][A-Z0-9_]{0,63}$ and never start with RC_; at most
+	// MaxCredentials entries and MaxCredentialsBytes of JSON. Fixed when the session
+	// opens — a re-minted token does not refresh them.
+	Credentials map[string]string
 	// AssertedBy defaults to Project, Assurance to DefaultAssurance.
 	AssertedBy string
 	Assurance  string
@@ -94,6 +110,8 @@ type tokenClaims struct {
 	Tenant      string         `json:"tenant,omitempty"`
 	Locale      string         `json:"locale,omitempty"`
 	ColorScheme string         `json:"color_scheme,omitempty"`
+	// A map marshals with sorted keys, which is what the hub golden pins.
+	Credentials map[string]string `json:"credentials,omitempty"`
 }
 
 type tokenPrincipal struct {
@@ -123,6 +141,9 @@ func MintEmbedToken(secret string, claims Claims) (string, error) {
 	}
 	origin, err := CanonicalOrigin(claims.Origin)
 	if err != nil {
+		return "", err
+	}
+	if err := validateCredentials(claims.Credentials); err != nil {
 		return "", err
 	}
 	ttl := claims.TTL
@@ -168,6 +189,7 @@ func MintEmbedToken(secret string, claims Claims) (string, error) {
 		Tenant:      claims.Tenant,
 		Locale:      claims.Locale,
 		ColorScheme: claims.ColorScheme,
+		Credentials: claims.Credentials,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -181,6 +203,25 @@ func MintEmbedToken(secret string, claims Claims) (string, error) {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(signingInput))
 	return signingInput + "." + b64(mac.Sum(nil)), nil
+}
+
+func validateCredentials(credentials map[string]string) error {
+	if len(credentials) == 0 {
+		return nil
+	}
+	if len(credentials) > MaxCredentials {
+		return refusal("CHAT_CREDENTIALS_INVALID")
+	}
+	for key := range credentials {
+		if !credentialKey.MatchString(key) || strings.HasPrefix(key, "RC_") {
+			return refusal("CHAT_CREDENTIALS_INVALID")
+		}
+	}
+	encoded, err := json.Marshal(credentials)
+	if err != nil || len(encoded) > MaxCredentialsBytes {
+		return refusal("CHAT_CREDENTIALS_INVALID")
+	}
+	return nil
 }
 
 // Audience is the host's required `aud` for a project's embed token.

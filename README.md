@@ -308,6 +308,12 @@ render** — tokens are short-lived and the `jti` is single-use when opening a s
 If the Chat Studio brief has an empty `principal_kinds` list, omit both `Kind` and `ExternalID`; otherwise
 derive both from the authenticated server session and use one kind declared by the brief.
 
+To let the agent call your own API as the chatting user, pass a token scoped to exactly that user in
+`Claims.Credentials` (env name → value, e.g. `ACME_AGENT_TOKEN`, `ACME_API_BASE`). Every run of that
+conversation sees them as plain env vars. Keys match `^[A-Z][A-Z0-9_]{0,63}$`, never `RC_*`, at most 8
+entries and 8 KiB (`CHAT_CREDENTIALS_INVALID` otherwise). They are fixed when the conversation opens:
+a re-minted token does not refresh them, so size the token's lifetime for one conversation.
+
 ## Multi-worker deployments
 
 The default nonce store is in-process, which is correct for exactly one process. Behind several
