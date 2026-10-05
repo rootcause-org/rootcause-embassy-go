@@ -199,6 +199,26 @@
       "body_sha256": "e444a2d29ae81f1ad47c627206272a53d248791457a69ee04ac213db0e150c78",
       "signature": "sha256=211591ef1d193aee02b59a31630e659d15a4409994fd72d95532ad9b5f739009",
       "note": ""
+    },
+    {
+      "name": "invocation_attachments",
+      "file": "actions/invocation_attachments.json",
+      "direction": "host->embassy",
+      "secret": "contract-reverse-secret",
+      "body_bytes": 1005,
+      "body_sha256": "710e7e694ecfad0c2feace631e567bd2d1214fdbd92634fc63cfaaa5d1bb6ceb",
+      "signature": "sha256=45451c6a8e054fd022447d128855ac4c69cf2a6323769056d77a2a84754da4de",
+      "note": "Optional inline attachments capability; unsupported ports refuse nonempty payload."
+    },
+    {
+      "name": "health_response_attachments",
+      "file": "actions/health_response_attachments.json",
+      "direction": "embassy->host",
+      "secret": "contract-reverse-secret",
+      "body_bytes": 145,
+      "body_sha256": "c599e2df7b9b28c1d548def8d42c1eabf055ae4f17034ec76d70c98b1f5d3afc",
+      "signature": "sha256=aa97969f5ea578962126fc010f6b4618933788d2ed963f2c5dc7d1d793da7118",
+      "note": "Supporting receiver health; version is implementation-specific."
     }
   ],
   "query_strings": [

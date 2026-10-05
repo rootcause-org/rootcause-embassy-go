@@ -63,6 +63,10 @@ for wire vocabulary. Go-specific distinctions:
 
 ## Known deviations from the Ruby reference
 
+- **Inline action attachments** are not materialized: nonempty maps and malformed values refuse as
+  signed `400 invalid_request` before resolution, including dry run; empty maps are accepted.
+  Invocation reads retain this port's stricter 8 MiB cap. Contract coverage is in
+  `internal/contract/contract_test.go`; do not advertise `attachments_inline` until implemented.
 - **stdout** is captured through `ActionAPI.Out()`, not by swapping a process-global stream, so
   `fmt.Println` in a script is NOT captured. This is what lets executions run concurrently.
 - **The tenant tuple** reaches a script as a typed argument, never through `RC_TENANT_*` env — the

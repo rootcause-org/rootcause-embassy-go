@@ -519,6 +519,115 @@ func TestDryRunMatchesGolden(t *testing.T) {
 	}
 }
 
+func TestUnsupportedInlineAttachmentsRefuseBeforeFetchOrExecution(t *testing.T) {
+	var golden map[string]any
+	if err := json.Unmarshal(fixture(t, "actions/invocation_attachments.json"), &golden); err != nil {
+		t.Fatal(err)
+	}
+	for _, dryRun := range []bool{false, true} {
+		for _, test := range []struct {
+			name  string
+			value any
+		}{
+			{"golden", golden["attachments"]},
+			{"nonempty map with empty array", map[string]any{"attachments": []any{}}},
+			{"array", []any{}},
+			{"null", nil},
+			{"string", "unsupported"},
+			{"boolean", true},
+			{"number", 1},
+		} {
+			t.Run(fmt.Sprintf("%s/dry_run=%t", test.name, dryRun), func(t *testing.T) {
+				marker := filepath.Join(t.TempDir(), "executed")
+				script := fmt.Sprintf(`package action
+import "os"
+import emb "github.com/rootcause-org/rootcause-embassy-go"
+func Run(a emb.ActionAPI, params map[string]any) (any, error) {
+    return nil, os.WriteFile(%q, []byte("executed"), 0600)
+}`, marker)
+				host := newFakeHost(t, script)
+				emb := newEmbassy(t, host, nil)
+				body := invocationBody(t, host, map[string]any{
+					"params": golden["params"], "schema": golden["schema"], "dry_run": dryRun,
+				})
+				// The general override helper removes nil; preserve an explicit null.
+				var invocation map[string]any
+				if err := json.Unmarshal(body, &invocation); err != nil {
+					t.Fatal(err)
+				}
+				invocation["attachments"] = test.value
+				body, err := json.Marshal(invocation)
+				if err != nil {
+					t.Fatal(err)
+				}
+				recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
+				assertClass(t, recorder, 400, "invalid_request")
+				if host.lastPath != "" {
+					t.Fatal("unsupported attachments reached script resolution")
+				}
+				if _, err := os.Stat(marker); !os.IsNotExist(err) {
+					t.Fatalf("script side effect was not absent: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestEmptyInlineAttachmentsPreserveExecutionAndDryRun(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry_run=%t", dryRun), func(t *testing.T) {
+			host := newFakeHost(t, goScript)
+			emb := newEmbassy(t, host, nil)
+			body := invocationBody(t, host, map[string]any{
+				"attachments": map[string]any{}, "dry_run": dryRun,
+				"params": map[string]any{"email": "x@acme.com", "attachments": []string{}},
+				"schema": map[string]any{
+					"email":       map[string]any{"type": "string", "required": true},
+					"attachments": map[string]any{"type": "string[]"},
+				},
+			})
+			recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
+			assertSigned(t, recorder)
+			if recorder.Code != 200 || host.lastPath != "/actions/script" {
+				t.Fatalf("empty map changed invocation behavior: %d %s", recorder.Code, recorder.Body)
+			}
+			if dryRun {
+				assertEnvelopeShape(t, recorder.Body.Bytes(), fixture(t, "actions/result_dry_run.json"))
+			} else if !strings.Contains(recorder.Body.String(), `"stdout":"looked up devise_send_password_reset"`) {
+				t.Fatalf("empty map skipped execution: %s", recorder.Body)
+			}
+		})
+	}
+}
+
+func TestInvocationReadCapDoesNotTrustContentLength(t *testing.T) {
+	host := newFakeHost(t, goScript)
+	emb := newEmbassy(t, host, nil)
+	// The first 8 MiB are valid signed JSON, padded with whitespace. Truncating
+	// here would execute it even though unread bytes remain on the connection.
+	body := invocationBody(t, host, nil)
+	body = append(body, bytes.Repeat([]byte(" "), (8<<20)-len(body))...)
+	signature := embassy.Sign(body, reverseSecret)
+	body = append(body, bytes.Repeat([]byte("x"), 16)...)
+	for _, length := range []int64{-1, 1} {
+		t.Run(fmt.Sprintf("content_length=%d", length), func(t *testing.T) {
+			reader := bytes.NewReader(body)
+			request := httptest.NewRequest(http.MethodPost, "/rootcause/action", reader)
+			request.ContentLength = length
+			request.Header.Set(embassy.SignatureHeader, signature)
+			recorder := httptest.NewRecorder()
+			emb.ActionHandler().ServeHTTP(recorder, request)
+			assertClass(t, recorder, 400, "invalid_request")
+			if reader.Len() != 15 {
+				t.Fatalf("body read exceeded the bounded overflow probe: %d bytes remain", reader.Len())
+			}
+			if host.lastPath != "" {
+				t.Fatal("oversized body reached script resolution")
+			}
+		})
+	}
+}
+
 // assertEnvelopeShape compares bytes with the volatile duration_ms normalized.
 func assertEnvelopeShape(t *testing.T, got, want []byte) {
 	t.Helper()

@@ -189,6 +189,11 @@ Notes:
 | fetch the script by digest, signed, and re-hash it | `502 resolve_failed` |
 | execute (skipped on `dry_run`) | `200` with `ok:false` |
 
+Inline action attachments are not supported: a nonempty top-level `attachments` map or malformed
+value returns signed `400 invalid_request` before fetch or execution, including on dry run. Absent
+or empty maps preserve existing behavior; health does not advertise `attachments_inline`.
+Invocation bodies are bounded at 8 MiB independently of `Content-Length`.
+
 Every answer — including every refusal — is signed. Two deliberate exceptions carry no signature
 because there is no key to sign with or nothing to protect: the `405 + Allow: POST` a non-POST gets
 at the mount (the liveness floor an operator probes) and the `503 ACTION_PLANE_DISABLED` a chat-only

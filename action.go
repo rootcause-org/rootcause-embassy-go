@@ -110,7 +110,7 @@ func (e *Embassy) serveInvocation(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	started := time.Now()
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxInvocationBytes))
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxInvocationBytes+1))
 	if err != nil {
 		refusal := invalidRequest("request body could not be read")
 		secret, selected := e.inboundSecret(nil)
@@ -125,6 +125,10 @@ func (e *Embassy) serveInvocation(w http.ResponseWriter, r *http.Request) {
 	secret, selected := e.inboundSecret(raw)
 	if !selected {
 		e.writeUnsigned(w, http.StatusUnauthorized, refusalEnvelope{Error: wireRefusal(badSignature("signature missing or invalid"))})
+		return
+	}
+	if len(raw) > maxInvocationBytes {
+		e.writeSigned(w, http.StatusBadRequest, refusalEnvelope{Error: wireRefusal(invalidRequest("request body exceeds size limit"))}, secret)
 		return
 	}
 	envelope, refusal := e.invoke(ctx, raw, r.Header.Get(SignatureHeader), started, secret)
@@ -268,6 +272,17 @@ func parseInvocation(body []byte) (*invocation, error) {
 			return nil, invalidRequest("dry_run must be a boolean")
 		}
 		inv.DryRun = b
+	}
+	// Inline bytes require materialization support. Never silently discard
+	// requested evidence, including on a dry run; an empty map is a no-op.
+	if value, present := raw["attachments"]; present {
+		attachments, ok := value.(map[string]any)
+		if !ok {
+			return nil, invalidRequest("attachments must be an object")
+		}
+		if len(attachments) != 0 {
+			return nil, invalidRequest("inline action attachments are not supported")
+		}
 	}
 
 	var missing []string
