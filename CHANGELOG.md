@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0
+
+Conforms to hub `2be70da` (decision 23): loader contract `?v=4` in the generated widget tag (hosted
+loader gained the persistent Turbo mode; generated tags behave as before).
+
 ## 0.5.0
 
 Conforms to hub `6d2c818` (decision 22: action-run id as chat-context locator).

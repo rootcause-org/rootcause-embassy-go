@@ -69,7 +69,7 @@ analysis/
 chat/
   jwt_vector.json                       secret + claims + iat → the exact token string
   jwt_vector_credentials.json           the same with a `credentials` claim (keys sorted)
-  widget_tag.html                       the loader <script> tag, ?v=3
+  widget_tag.html                       the loader <script> tag, ?v=4
   sse_frames.jsonl                      redacted decoded data frames from one complete SSE turn
 ```
 
