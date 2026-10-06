@@ -100,6 +100,24 @@ func TestStartAnalysisValidatesBeforeSending(t *testing.T) {
 			wantCode: "PRINCIPAL_REQUIRED",
 		},
 		{
+			name: "two context refs",
+			request: AnalysisRequest{Body: "x", ContextRefs: []ContextRef{
+				{Kind: "action_run", ID: "55555555-5555-5555-5555-555555555555"},
+				{Kind: "action_run", ID: "66666666-6666-6666-6666-666666666666"},
+			}},
+			wantCode: "ANALYSIS_REQUEST_INVALID",
+		},
+		{
+			name:     "unknown context ref kind",
+			request:  AnalysisRequest{Body: "x", ContextRefs: []ContextRef{{Kind: "session", ID: "55555555-5555-5555-5555-555555555555"}}},
+			wantCode: "ANALYSIS_REQUEST_INVALID",
+		},
+		{
+			name:     "malformed context ref id",
+			request:  AnalysisRequest{Body: "x", ContextRefs: []ContextRef{{Kind: "action_run", ID: "run-42"}}},
+			wantCode: "ANALYSIS_REQUEST_INVALID",
+		},
+		{
 			name:     "malformed base64",
 			request:  AnalysisRequest{Body: "x", Attachments: []Attachment{{ContentBase64: "!!!"}}},
 			wantCode: "ATTACHMENT_INVALID",

@@ -148,6 +148,11 @@ func Run(a embassy.ActionAPI, params map[string]any) (any, error) {
 		}
 	}
 
+	// a.ActionRunID() (also env RC_ACTION_RUN_ID) is the host's id for THIS
+	// execution, "" on older hosts. Store it on a record you create; pass it back
+	// as ContextRefs when that record is later analyzed (see Async analysis).
+	_ = a.ActionRunID()
+
 	user, err := rcsymbols.DB.FindUser(a.Context(), email, scope)
 	if err != nil {
 		return nil, err
@@ -230,6 +235,10 @@ analysis, err := emb.StartAnalysis(ctx, embassy.AnalysisRequest{
 	// Optional: assert WHO this is on behalf of, from your OWN authenticated session.
 	// Never from model output, never from user input.
 	Principal: &embassy.Principal{Kind: "acme_admin", ExternalID: user.ID, Assurance: "session"},
+	// Optional: a ticket created by a chat-escalation action can hand the run that
+	// chat. Use ONLY the ActionRunID the action stored (at most one ref); the host
+	// authorizes it and the action's manifest must opt in (else CONTEXT_REF_REFUSED).
+	ContextRefs: []embassy.ContextRef{{Kind: embassy.ContextRefKindActionRun, ID: ticket.ActionRunID}},
 })
 // persist analysis.AnalysisID + analysis.SessionID on your record
 ```

@@ -142,16 +142,21 @@ func clonePrincipalClaim(value any) any {
 
 const principalEnvPrefix = "RC_PRINCIPAL_"
 
-// principalEnvironment builds the exact virtual environment for one invocation.
-// The trampoline clears it before and after every action run.
-func principalEnvironment(principal *PrincipalContext) map[string]string {
+const actionRunIDEnv = "RC_ACTION_RUN_ID"
+
+// invocationEnvironment builds the exact virtual environment for one invocation.
+// The trampoline clears it before and after every action run, so an absent
+// principal or action_run_id is absent, never a prior run's value.
+func invocationEnvironment(principal *PrincipalContext, actionRunID string) map[string]string {
+	environment := map[string]string{}
+	if actionRunID != "" {
+		environment[actionRunIDEnv] = actionRunID
+	}
 	if principal == nil {
-		return nil
+		return environment
 	}
-	environment := map[string]string{
-		principalEnvPrefix + "KIND":        principal.kind,
-		principalEnvPrefix + "EXTERNAL_ID": principal.externalID,
-	}
+	environment[principalEnvPrefix+"KIND"] = principal.kind
+	environment[principalEnvPrefix+"EXTERNAL_ID"] = principal.externalID
 	for _, name := range sortedKeys(principal.claims) {
 		environment[principalEnvPrefix+"CLAIM_"+strings.ToUpper(name)] = principalClaimEnvValue(principal.claims[name])
 	}

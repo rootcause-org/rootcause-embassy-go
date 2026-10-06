@@ -31,17 +31,22 @@ type ActionAPI interface {
 	Context() context.Context
 	// ActionID is the registry id of the action being executed.
 	ActionID() string
+	// ActionRunID is the host's ledger id for this execution, or "" when the
+	// invocation carried none. It is the only valid source for an analysis
+	// trigger's ContextRefs — never a param or user text.
+	ActionRunID() string
 	// DryRun is always false inside Run — a dry run never executes — and exists so
 	// a script can be written defensively.
 	DryRun() bool
 }
 
 type actionAPI struct {
-	tenant    *TenantContext
-	principal *PrincipalContext
-	out       io.Writer
-	ctx       context.Context
-	actionID  string
+	tenant      *TenantContext
+	principal   *PrincipalContext
+	out         io.Writer
+	ctx         context.Context
+	actionID    string
+	actionRunID string
 }
 
 func (a *actionAPI) Tenant() *TenantContext       { return a.tenant }
@@ -49,6 +54,7 @@ func (a *actionAPI) Principal() *PrincipalContext { return a.principal }
 func (a *actionAPI) Out() io.Writer               { return a.out }
 func (a *actionAPI) Context() context.Context     { return a.ctx }
 func (a *actionAPI) ActionID() string             { return a.actionID }
+func (a *actionAPI) ActionRunID() string          { return a.actionRunID }
 func (a *actionAPI) DryRun() bool                 { return false }
 
 // execResult is the executor's half of the wire envelope.
@@ -97,11 +103,11 @@ const (
 type program struct {
 	interp *interp.Interpreter
 
-	api          ActionAPI
-	params       map[string]any
-	principalEnv map[string]string
-	returned     any
-	returnErr    error
+	api       ActionAPI
+	params    map[string]any
+	env       map[string]string
+	returned  any
+	returnErr error
 }
 
 // executor memoizes parsed programs per digest. Different digests always run
@@ -127,6 +133,9 @@ func newExecutor(cfg *Config) *executor {
 // poolKey binds a pooled interpreter to its complete trusted scope. Scripts may
 // retain package state, so a principal-less run must never inherit a prior
 // principal assertion through an interpreter reused for a different scope.
+// action_run_id is deliberately NOT part of the key: it is unique per execution
+// (keying on it would disable pooling) and reaches the script only through the
+// per-run ActionAPI and the virtual env the trampoline rebuilds every run.
 func poolKey(hexDigest string, tenant *TenantContext, principal *PrincipalContext) string {
 	if tenant == nil && principal == nil {
 		return hexDigest
@@ -192,7 +201,7 @@ func (p *programPool) put(prog *program) {
 // run executes a digest-verified script body. It never panics and never returns
 // an error: every outcome — script error, panic, deadline, non-serializable
 // return — becomes a structured failure envelope.
-func (e *executor) run(ctx context.Context, script, hexDigest, actionID string, tenant *TenantContext, principal *PrincipalContext, params map[string]any) (result execResult) {
+func (e *executor) run(ctx context.Context, script, hexDigest, actionID, actionRunID string, tenant *TenantContext, principal *PrincipalContext, params map[string]any) (result execResult) {
 	out := newCappedWriter(e.cfg.MaxStdoutBytes)
 	var err error
 
@@ -214,9 +223,9 @@ func (e *executor) run(ctx context.Context, script, hexDigest, actionID string, 
 		}
 	}
 
-	prog.api = &actionAPI{tenant: tenant, principal: principal, out: out, ctx: ctx, actionID: actionID}
+	prog.api = &actionAPI{tenant: tenant, principal: principal, out: out, ctx: ctx, actionID: actionID, actionRunID: actionRunID}
 	prog.params = params
-	prog.principalEnv = principalEnvironment(principal)
+	prog.env = invocationEnvironment(principal, actionRunID)
 	prog.returned, prog.returnErr = nil, nil
 
 	_, err = prog.interp.EvalWithContext(ctx, invokeExprText)
@@ -276,7 +285,7 @@ func (e *executor) compile(script string) (*program, error) {
 			// by value at Use time, so a per-run var would hand the script stale
 			// arguments.
 			"Args": reflect.ValueOf(func() (ActionAPI, map[string]any, map[string]string) {
-				return prog.api, prog.params, prog.principalEnv
+				return prog.api, prog.params, prog.env
 			}),
 			"Capture": reflect.ValueOf(func(v any, err error) { prog.returned, prog.returnErr = v, err }),
 		},

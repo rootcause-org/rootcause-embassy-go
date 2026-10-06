@@ -74,6 +74,8 @@ for wire vocabulary. Go-specific distinctions:
 - **The principal** reaches scripts as a frozen `ActionAPI.Principal()` value and the contract's
   `RC_PRINCIPAL_*` virtual environment. Each scope-keyed Yaegi program starts with only this invocation's
   values, so a principal-less or concurrent invocation cannot observe a prior one.
+- **`action_run_id`** reaches scripts as `ActionAPI.ActionRunID()` and virtual `RC_ACTION_RUN_ID`. It is
+  NOT part of the program pool key (unique per run); the trampoline rebuilds the env every run.
 - **`runtime`** must be `go`; the hub's invocation fixtures declare `ruby` and are therefore refused
   with `400 invalid_request` here, which is the contract's own rule (hub decision 8).
 - **Execution-failure `error.class` values** inside a `200` result envelope (`timeout`, `panic`,

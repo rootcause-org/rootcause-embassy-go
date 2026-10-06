@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net/http"
 	"time"
+
+	"github.com/rootcause-org/rootcause-embassy-go/internal/uuid"
 )
 
 // maxTotalAttachmentBytes is the host's aggregate decoded cap for one trigger.
@@ -31,6 +33,18 @@ type Principal struct {
 	SourceMetadata map[string]any `json:"source_metadata,omitempty"`
 }
 
+// ContextRef hands an analysis the chat that led to an action execution. Kind is
+// "action_run"; ID is the ActionAPI.ActionRunID() the action stored with the
+// record it created — never a param, user text or an older unverified hint. The
+// id only locates: the host authorizes it from its own rows.
+type ContextRef struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+// ContextRefKindActionRun is the only ContextRef kind the contract defines.
+const ContextRefKindActionRun = "action_run"
+
 // AnalysisRequest asks rootcause to analyze something and answer later over the
 // result route.
 type AnalysisRequest struct {
@@ -47,6 +61,9 @@ type AnalysisRequest struct {
 	// SessionID continues a conversation. Omit on turn 1 and the host mints one;
 	// on a follow-up send ONLY the new message — the host holds the prior turns.
 	SessionID string
+	// ContextRefs optionally names at most one source chat (see ContextRef). It is
+	// independent of SessionID continuity.
+	ContextRefs []ContextRef
 	// Tenant binds the run by slug on a tenant-enabled project.
 	Tenant    string
 	Principal *Principal
@@ -110,6 +127,7 @@ type triggerPayload struct {
 	Attachments []Attachment   `json:"attachments"`
 	Metadata    map[string]any `json:"metadata"`
 	SessionID   string         `json:"session_id,omitempty"`
+	ContextRefs []ContextRef   `json:"context_refs,omitempty"`
 	Principal   *Principal     `json:"principal,omitempty"`
 	Nonce       string         `json:"nonce"`
 	IssuedAt    string         `json:"issued_at"`
@@ -161,6 +179,9 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 			return Analysis{}, publicError("PRINCIPAL_REQUIRED")
 		}
 	}
+	if err := checkContextRefs(request.ContextRefs); err != nil {
+		return Analysis{}, err
+	}
 
 	attachments := request.Attachments
 	if attachments == nil {
@@ -177,6 +198,7 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 		Attachments: attachments,
 		Metadata:    metadata,
 		SessionID:   request.SessionID,
+		ContextRefs: request.ContextRefs,
 		Principal:   request.Principal,
 		Nonce:       e.cfg.Nonce(),
 		IssuedAt:    e.issuedAt(),
@@ -198,6 +220,7 @@ func (e *Embassy) StartAnalysis(ctx context.Context, request AnalysisRequest) (A
 		"analysis_id", analysis.AnalysisID,
 		"metadata_keys", sortedKeys(metadata),
 		"attachments", len(attachments),
+		"context_refs", len(request.ContextRefs),
 	)
 	return analysis, nil
 }
@@ -302,6 +325,20 @@ func (e *Embassy) checkAttachments(attachments []Attachment) error {
 		// attachments uploads in full and is rejected on arrival.
 		if total > maxTotalAttachmentBytes {
 			return publicError("ATTACHMENTS_TOO_LARGE")
+		}
+	}
+	return nil
+}
+
+// checkContextRefs mirrors the host's shape rule so a malformed reference fails
+// before sending; eligibility is the host's call (CONTEXT_REF_REFUSED).
+func checkContextRefs(refs []ContextRef) error {
+	if len(refs) > 1 {
+		return publicError("ANALYSIS_REQUEST_INVALID").WithDetail("context_refs allows at most one entry")
+	}
+	for _, ref := range refs {
+		if ref.Kind != ContextRefKindActionRun || !uuid.IsCanonical(ref.ID) {
+			return publicError("ANALYSIS_REQUEST_INVALID").WithDetail(`context_refs entry must be {"kind":"action_run","id":<canonical lowercase UUID>}`)
 		}
 	}
 	return nil

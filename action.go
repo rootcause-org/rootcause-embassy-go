@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/rootcause-org/rootcause-embassy-go/internal/uuid"
 )
 
 // maxInvocationBytes bounds what we will read off an unauthenticated connection.
@@ -216,7 +218,7 @@ func (e *Embassy) invoke(ctx context.Context, raw []byte, signature string, star
 
 	execCtx, cancel := context.WithTimeout(ctx, e.cfg.Timeout)
 	defer cancel()
-	outcome := e.executor.run(execCtx, script, hexDigest, invocation.ActionID, tenant, principal, params)
+	outcome := e.executor.run(execCtx, script, hexDigest, invocation.ActionID, invocation.ActionRunID, tenant, principal, params)
 
 	envelope := resultEnvelope{
 		OK:          outcome.ok,
@@ -244,8 +246,10 @@ type invocation struct {
 	Nonce        string
 	IssuedAt     string
 	Runtime      string
-	DryRun       bool
-	raw          map[string]any
+	// ActionRunID is the host's ledger id for this execution; empty when absent.
+	ActionRunID string
+	DryRun      bool
+	raw         map[string]any
 }
 
 func parseInvocation(body []byte) (*invocation, error) {
@@ -272,6 +276,14 @@ func parseInvocation(body []byte) (*invocation, error) {
 			return nil, invalidRequest("dry_run must be a boolean")
 		}
 		inv.DryRun = b
+	}
+	// Host-stamped provenance. Validated even on a dry run, which never exposes it.
+	if value, present := raw["action_run_id"]; present {
+		id, ok := value.(string)
+		if !ok || !uuid.IsCanonical(id) {
+			return nil, invalidRequest("action_run_id must be a canonical lowercase UUID")
+		}
+		inv.ActionRunID = id
 	}
 	// Inline bytes require materialization support. Never silently discard
 	// requested evidence, including on a dry run; an empty map is a no-op.

@@ -503,6 +503,123 @@ func TestPrincipalFixtureReachesOnlyItsInvocation(t *testing.T) {
 	}
 }
 
+const actionRunScript = `package action
+
+import (
+	"os"
+	emb "github.com/rootcause-org/rootcause-embassy-go"
+)
+
+func Run(a emb.ActionAPI, params map[string]any) (any, error) {
+	env, present := os.LookupEnv("RC_ACTION_RUN_ID")
+	return map[string]any{"typed": a.ActionRunID(), "env": env, "env_present": present}, nil
+}
+`
+
+const actionRunID = "55555555-5555-5555-5555-555555555555"
+
+// actionRunInvocation is invocation_action_run.json made executable here: Go
+// runtime, this host's digest, a per-call nonce, and optional field overrides.
+func actionRunInvocation(t *testing.T, host *fakeHost, nonce string, overrides map[string]any) []byte {
+	t.Helper()
+	var invocation map[string]any
+	if err := json.Unmarshal(fixture(t, "actions/invocation_action_run.json"), &invocation); err != nil {
+		t.Fatal(err)
+	}
+	invocation["runtime"] = "go"
+	invocation["script_digest"] = host.digest
+	invocation["nonce"] = nonce
+	for key, value := range overrides {
+		if value == nil {
+			delete(invocation, key)
+			continue
+		}
+		invocation[key] = value
+	}
+	body, err := json.Marshal(invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestActionRunIDReachesOnlyItsInvocation(t *testing.T) {
+	// A stale process value must never stand in for the host-stamped one.
+	t.Setenv("RC_ACTION_RUN_ID", "99999999-9999-9999-9999-999999999999")
+	host := newFakeHost(t, actionRunScript)
+	emb := newEmbassy(t, host, nil)
+
+	run := func(body []byte) map[string]any {
+		t.Helper()
+		recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
+		assertSigned(t, recorder)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
+		}
+		var envelope struct {
+			OK          bool           `json:"ok"`
+			ReturnValue map[string]any `json:"return_value"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil || !envelope.OK {
+			t.Fatalf("envelope = %s (%v)", recorder.Body, err)
+		}
+		return envelope.ReturnValue
+	}
+
+	got := run(actionRunInvocation(t, host, "action-run-present", nil))
+	if got["typed"] != actionRunID || got["env"] != actionRunID || got["env_present"] != true {
+		t.Fatalf("action_run_id exposure = %v", got)
+	}
+
+	// Same tenant scope reuses the pooled interpreter: nothing may carry over.
+	got = run(actionRunInvocation(t, host, "action-run-absent", map[string]any{"action_run_id": nil}))
+	if got["typed"] != "" || got["env_present"] != false {
+		t.Fatalf("absent action_run_id leaked: %v", got)
+	}
+
+	got = run(invocationBody(t, host, nil))
+	if got["typed"] != "" || got["env_present"] != false {
+		t.Fatalf("flat invocation exposed an action_run_id: %v", got)
+	}
+}
+
+func TestActionRunIDDryRunExecutesNothing(t *testing.T) {
+	host := newFakeHost(t, actionRunScript)
+	emb := newEmbassy(t, host, nil)
+	body := actionRunInvocation(t, host, "action-run-dry", map[string]any{"dry_run": true})
+	recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
+	assertSigned(t, recorder)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
+	}
+	assertEnvelopeShape(t, recorder.Body.Bytes(), fixture(t, "actions/result_dry_run.json"))
+}
+
+func TestMalformedActionRunIDRefusesBeforeResolution(t *testing.T) {
+	for name, value := range map[string]any{
+		"not_a_uuid": "run-42",
+		"uppercase":  "55555555-5555-5555-5555-55555555555A",
+		"no_hyphens": "55555555555555555555555555555555",
+		"empty":      "",
+		"number":     42,
+		"null":       json.RawMessage("null"),
+	} {
+		for _, dryRun := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dry_run=%t", name, dryRun), func(t *testing.T) {
+				host := newFakeHost(t, actionRunScript)
+				emb := newEmbassy(t, host, nil)
+				overrides := map[string]any{"action_run_id": value, "dry_run": dryRun}
+				body := actionRunInvocation(t, host, "action-run-bad", overrides)
+				recorder := postSigned(t, emb.ActionHandler(), body, embassy.Sign(body, reverseSecret))
+				assertClass(t, recorder, http.StatusBadRequest, embassy.ClassInvalidRequest)
+				if host.lastPath != "" {
+					t.Fatal("a malformed action_run_id must refuse before the script fetch")
+				}
+			})
+		}
+	}
+}
+
 func TestDryRunMatchesGolden(t *testing.T) {
 	host := newFakeHost(t, goScript)
 	emb := newEmbassy(t, host, nil)
@@ -1185,6 +1302,27 @@ func TestOutboundSerializationMatchesGoldens(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertOutbound(t, host, fixture(t, "analysis/trigger_with_principal.json"))
+	})
+
+	t.Run("trigger_with_context_refs", func(t *testing.T) {
+		host := newFakeHost(t, goScript)
+		host.response = string(fixture(t, "analysis/trigger_response.json"))
+		emb := newEmbassy(t, host, func(cfg *embassy.Config) {
+			cfg.Nonce = func() string { return "contract-nonce-trigger-context" }
+		})
+
+		_, err := emb.StartAnalysis(t.Context(), embassy.AnalysisRequest{
+			Subject:     "Ticket from chat escalation",
+			Body:        "Created from the chat; the admin reported a refused password reset.",
+			Metadata:    map[string]any{"resource_type": "SupportTicket", "resource_id": "42"},
+			SessionID:   "support_ticket-42",
+			ContextRefs: []embassy.ContextRef{{Kind: embassy.ContextRefKindActionRun, ID: actionRunID}},
+			Tenant:      "acme",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertOutbound(t, host, fixture(t, "analysis/trigger_with_context_refs.json"))
 	})
 
 	t.Run("sent_message", func(t *testing.T) {

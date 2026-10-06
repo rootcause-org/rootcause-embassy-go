@@ -52,7 +52,7 @@ func TestPrincipalEnvironmentIsInvocationScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := principalEnvironment(principal)
+	got := invocationEnvironment(principal, "")
 	want := map[string]string{
 		"RC_PRINCIPAL_KIND":             "acme_user",
 		"RC_PRINCIPAL_EXTERNAL_ID":      "user-8f3",
@@ -62,7 +62,10 @@ func TestPrincipalEnvironmentIsInvocationScoped(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("environment = %#v, want %#v", got, want)
 	}
-	if got := principalEnvironment(nil); len(got) != 0 {
+	if got := invocationEnvironment(nil, ""); len(got) != 0 {
 		t.Fatalf("principal-less environment = %#v", got)
+	}
+	if got := invocationEnvironment(nil, "55555555-5555-5555-5555-555555555555"); !reflect.DeepEqual(got, map[string]string{"RC_ACTION_RUN_ID": "55555555-5555-5555-5555-555555555555"}) {
+		t.Fatalf("action-run environment = %#v", got)
 	}
 }

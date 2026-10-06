@@ -51,6 +51,16 @@
       "note": ""
     },
     {
+      "name": "invocation_action_run",
+      "file": "actions/invocation_action_run.json",
+      "direction": "host->embassy",
+      "secret": "contract-reverse-secret",
+      "body_bytes": 518,
+      "body_sha256": "0e71d58444de7d3c2ab9038f4744b0c20e4f10da68ea2614fcb973e1af5c6d8c",
+      "signature": "sha256=ac1865483a86ef8904f9139d71adcf9e1310841d227b8b7472c9c9a8cba43bd6",
+      "note": ""
+    },
+    {
       "name": "fetch_response",
       "file": "actions/fetch_response.json",
       "direction": "host->embassy",
@@ -158,6 +168,16 @@
       "body_bytes": 525,
       "body_sha256": "e09476d70bf647133df3c0a338be66904a4929ab41732bd6451c4f3220a2b4d2",
       "signature": "sha256=837ac4bf3e4dbf4939f4dcf2698c11e55f28c391372e6f2c034fa08a219336bd",
+      "note": ""
+    },
+    {
+      "name": "trigger_with_context_refs",
+      "file": "analysis/trigger_with_context_refs.json",
+      "direction": "embassy->host",
+      "secret": "contract-reverse-secret",
+      "body_bytes": 407,
+      "body_sha256": "ff4fc19f2faeed9ea51787d103b425f971edf979b56327ff3285390a3075c102",
+      "signature": "sha256=5254371bb290ab4114ed186667c34881b44b5baa9156ac308c62860742fc7851",
       "note": ""
     },
     {

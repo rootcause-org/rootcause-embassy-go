@@ -23,6 +23,7 @@ One copy. Every language repo and the host **vendor** these and replay them byte
 | tenant_id | `22222222-2222-2222-2222-222222222222` |
 | run / analysis id | `33333333-3333-3333-3333-333333333333` |
 | session_id | `44444444-4444-4444-4444-444444444444` |
+| action_run_id | `55555555-5555-5555-5555-555555555555` |
 | script | `{ found: true, email: params[:email] }` |
 | digest | `sha256:3932d2ca27f8fbf9fd05be71c099fa4a2c2241d0ea64683e542f5f0f3438d7bd` |
 
@@ -43,6 +44,7 @@ actions/
   invocation_principal.json             tenant tuple + host-stamped principal and typed claims
   invocation_attachments.json           parameter-keyed inline file + unavailable descriptor
   invocation_dry_run.json               dry_run: true
+  invocation_action_run.json            tenant tuple + host-stamped action_run_id
   script_fetch_query.txt                the RAW query string the GET signature covers
   health_query.txt                      map-mode health GET raw query
   fetch_response.json                   signed script-by-digest response
@@ -58,6 +60,7 @@ actions/
 analysis/
   trigger.json                          minimal: no session, no principal, no tenant
   trigger_with_principal.json           principal + session_id + tenant + attachment
+  trigger_with_context_refs.json        session_id + one action_run context reference + tenant
   trigger_response.json                 the 202
   result_callback.json                  full surface incl. project_id/executed_actions/questions/delete
   result_ack.json                       the signed 200 ack
