@@ -46,7 +46,7 @@ const (
 	// loaderRevision is the loader CONTRACT revision. The host immutable-caches that
 	// asset, so bump it whenever a generated attribute starts requiring new loader
 	// behavior — otherwise an already-open browser pairs a new tag with stale JS.
-	loaderRevision = "4"
+	loaderRevision = "5"
 )
 
 // Credentials limits. The host re-checks every rule and refuses the session open,

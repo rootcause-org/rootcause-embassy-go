@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+Conforms to hub `b3a9dad`: widget tags use loader `?v=5` for per-message page Markdown and queued
+snapshots. Re-vendored all fixtures, including unsigned page URL normalization cases.
+
 ## 0.6.0
 
 Conforms to hub `2be70da` (decision 23): loader contract `?v=4` in the generated widget tag (hosted

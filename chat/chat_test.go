@@ -179,7 +179,7 @@ func TestWidgetTagOmitsUnsetAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `<script src="https://app.replypen.com/chat/widget/v1/loader.js?v=4" data-rc-project="acme" data-rc-token="tok"></script>`
+	want := `<script src="https://app.replypen.com/chat/widget/v1/loader.js?v=5" data-rc-project="acme" data-rc-token="tok"></script>`
 	if tag != want {
 		t.Fatalf("tag = %s", tag)
 	}

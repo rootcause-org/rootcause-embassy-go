@@ -322,6 +322,11 @@ render** — tokens are short-lived and the `jti` is single-use when opening a s
 If the Chat Studio brief has an empty `principal_kinds` list, omit both `Kind` and `ExternalID`; otherwise
 derive both from the authenticated server session and use one kind declared by the brief.
 
+Generated tags use loader `?v=5`. Register `RootCause('boot', {getPageContext: () => markdown})`
+before the loader executes to describe the current UI per message. The hosted client preserves
+each submission's snapshot through queueing and retries; context is an untrusted hint.
+See the [page context contract](https://github.com/rootcause-org/rootcause-embassy/blob/main/planes/chat.md#page-context-page_url-page_context).
+
 To let the agent call your own API as the chatting user, pass a token scoped to exactly that user in
 `Claims.Credentials` (env name → value, e.g. `ACME_AGENT_TOKEN`, `ACME_API_BASE`). Every run of that
 conversation sees them as plain env vars. Keys match `^[A-Z][A-Z0-9_]{0,63}$`, never `RC_*`, at most 8
